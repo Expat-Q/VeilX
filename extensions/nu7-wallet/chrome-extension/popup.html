@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VeilX Shielded Wallet</title>
+  <style>
+    :root {
+      --bg: #090a0f;
+      --surface: #12141c;
+      --surface-2: #181b26;
+      --surface-3: #202433;
+      --border: #232738;
+      --border-hover: #373e56;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --subtle: #64748b;
+      --gold: #f59e0b;
+      --gold-hover: #fbbf24;
+      --emerald: #10b981;
+      --emerald-subtle: rgba(16, 185, 129, 0.12);
+      --danger: #ef4444;
+      --danger-subtle: rgba(239, 68, 68, 0.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 380px;
+      min-height: 590px;
+      margin: 0 auto;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      position: relative;
+      letter-spacing: -0.01em;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Top Bar */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .brand-logo-img {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      object-fit: contain;
+    }
+    .brand-meta {
+      display: flex;
+      flex-direction: column;
+    }
+    .brand-name {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .brand-sub {
+      font-size: 10px;
+      color: var(--subtle);
+      font-weight: 500;
+    }
+    .net-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--emerald-subtle);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 6px #10b981;
+    }
+    .btn-icon-top {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      padding: 4px 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+    .btn-icon-top:hover {
+      border-color: var(--border-hover);
+      color: var(--text);
+    }
+
+    /* Container Views */
+    .view-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .content {
+      flex: 1;
+      padding: 14px 16px;
+      overflow-y: auto;
+    }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    /* Onboarding Screen */
+    .onboarding {
+      padding: 32px 20px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      flex: 1;
+    }
+    .logo-hero-img {
+      width: 56px;
+      height: 56px;
+      border-radius: 14px;
+      object-fit: contain;
+      display: block;
+      margin: 0 auto 16px;
+      box-shadow: 0 0 24px rgba(245, 158, 11, 0.15);
+    }
+    .onboarding-title {
+      font-size: 19px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      letter-spacing: -0.02em;
+    }
+    .onboarding-sub {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 24px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Hero Balance Section */
+    .hero {
+      text-align: center;
+      padding: 18px 12px 14px;
+      background: radial-gradient(circle at top, rgba(245, 158, 11, 0.08), transparent 70%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      margin-bottom: 12px;
+    }
+    .hero-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    .hero-balance {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      line-height: 1.1;
+    }
+    .hero-balance span.unit {
+      font-size: 16px;
+      color: var(--gold);
+      font-weight: 700;
+      margin-left: 2px;
+    }
+    .hero-breakdown-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .hero-breakdown-pill strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    /* Primary Quick Action Buttons (Send / Receive) */
+    .actions-dual {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .action-btn-primary {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    .action-btn-primary:hover {
+      border-color: var(--gold);
+      background: rgba(245, 158, 11, 0.08);
+      color: var(--gold);
+    }
+
+    /* Form Fields & Inputs */
+    .field { margin-bottom: 10px; }
+    .field label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    .input-with-action {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    input, textarea {
+      width: 100%;
+      background: #090a0f;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 11px;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, textarea:focus { border-color: var(--gold); }
+    .input-pill-btn {
+      position: absolute;
+      right: 7px;
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--gold);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 7px;
+      cursor: pointer;
+    }
+    .input-pill-btn:hover {
+      border-color: var(--gold);
+    }
+
+    /* Clean Buttons */
+    .btn-primary {
+      width: 100%;
+      background: var(--gold);
+      color: #090a0f;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover { background: var(--gold-hover); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-secondary {
+      width: 100%;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    .btn-secondary:hover {
+      border-color: var(--border-hover);
+      background: var(--surface-3);
+    }
+    .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Mono Address Boxes */
+    .mono-box {
+      background: #090a0f;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      word-break: break-all;
+      color: #cbd5e1;
+      line-height: 1.4;
+    }
+
+    /* Seed Phrase Grid */
+    .seed-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      background: #090a0f;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 12px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .seed-word {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 6px;
+      font-size: 11px;
+      font-family: monospace;
+      display: flex;
+      gap: 5px;
+      color: #e2e8f0;
+    }
+    .seed-num {
+      color: var(--subtle);
+      user-select: none;
+      min-width: 14px;
+    }
+
+    /* Birthday Height Banner */
+    .birthday-card {
+      background: rgba(245, 158, 11, 0.05);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .birthday-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gold);
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+    .birthday-val {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 14px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+    .birthday-desc {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* Activity / Transaction Rows */
+    .tx-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 12px;
+    }
+    .tx-item:last-child { border-bottom: none; }
+    .tx-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tx-icon-circle {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+    }
+    .tx-title { font-weight: 600; font-size: 12px; }
+    .tx-sub { font-size: 10px; color: var(--subtle); font-family: monospace; }
+    .tx-right { text-align: right; }
+    .tx-amount { font-weight: 700; font-family: monospace; }
+    .tx-amount.in { color: #34d399; }
+    .tx-amount.out { color: var(--text); }
+    .tx-status-badge {
+      font-size: 9px;
+      color: var(--subtle);
+      font-weight: 600;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+    .badge-emerald { background: var(--emerald-subtle); color: #34d399; }
+    .badge-amber { background: rgba(245, 158, 11, 0.12); color: #fbbf24; }
+    .badge-blue { background: rgba(59, 130, 246, 0.12); color: #60a5fa; }
+
+    /* Toasts */
+    .toast {
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      margin-top: 8px;
+      display: none;
+      line-height: 1.4;
+    }
+    .toast.ok {
+      background: var(--emerald-subtle);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      display: block;
+    }
+    .toast.err {
+      background: var(--danger-subtle);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #f87171;
+      display: block;
+    }
+
+    /* Bottom Tab Navigation */
+    .bottom-nav {
+      display: flex;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 6px 8px;
+    }
+    .nav-item {
+      flex: 1;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 6px 4px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+    .nav-item svg { stroke: currentColor; }
+    .nav-item:hover { color: var(--text); }
+    .nav-item.active {
+      color: var(--gold);
+      background: rgba(245, 158, 11, 0.08);
+    }
+    .nav-item.active svg { stroke: var(--gold); }
+
+    /* Modals */
+    .modal-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 100;
+    }
+    .modal-card {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    .modal-header {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .review-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 5px 0;
+      font-size: 11px;
+    }
+    .review-label { color: var(--muted); }
+    .review-val { font-family: monospace; font-weight: 600; color: var(--text); }
+    .review-val.highlight { color: var(--gold); font-size: 13px; font-weight: 700; }
+    .review-val.total { font-size: 14px; font-weight: 700; color: #fff; }
+    .review-divider { height: 1px; background: var(--border); margin: 6px 0; }
+
+    /* Settings rows */
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      cursor: pointer;
+    }
+    .settings-row:last-child { border-bottom: none; }
+    .settings-row-label { font-size: 12px; font-weight: 600; }
+    .settings-row-sub { font-size: 10px; color: var(--subtle); margin-top: 1px; }
+
+    /* Collapsible elements */
+    details summary {
+      cursor: pointer;
+      font-size: 11px;
+      color: var(--muted);
+      user-select: none;
+      outline: none;
+      font-weight: 600;
+    }
+    details summary:hover { color: var(--text); }
+
+    /* QR Code Container */
+    .qr-box {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 12px;
+      display: inline-block;
+      margin: 12px auto;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="brand">
+      <img src="VeilX_logo.png" alt="VeilX" class="brand-logo-img" />
+      <div class="brand-meta">
+        <span class="brand-name">VeilX</span>
+        <span class="brand-sub">Shielded Zcash</span>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <button id="btnTopLock" title="Lock Wallet" class="btn-icon-top" style="display:none;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </button>
+      <div class="net-pill" title="Testnet Active (Branch ID: 0x37A5165B)">
+        <span class="dot"></span>
+        <span>Testnet</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW 0: UNLOCK WALLET SCREEN -->
+  <div id="unlockWalletView" class="view-container" style="display: none;">
+    <div class="onboarding">
+      <img src="VeilX_logo.png" alt="VeilX Logo" class="logo-hero-img" />
+      <div class="onboarding-title">Unlock VeilX</div>
+      <div class="onboarding-sub">
+        Enter your password to decrypt your private spend keys:
+      </div>
+
+      <div class="field" style="text-align: left; margin-bottom: 12px;">
+        <label>Vault Password</label>
+        <input id="unlockPasswordInput" type="password" placeholder="Enter password..." autocomplete="current-password" />
+      </div>
+
+      <button id="btnUnlockWallet" class="btn-primary" style="margin-bottom: 8px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+        <span>Unlock Wallet</span>
+      </button>
+      <div id="unlockErrorToast" class="toast err" style="display: none; margin-bottom: 8px;"></div>
+
+      <div style="margin-top: 14px;">
+        <button id="btnResetFromUnlock" class="btn-secondary" style="font-size: 11px; color: var(--danger); border-color: rgba(239, 68, 68, 0.3);">
+          Reset Wallet
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW 1: FIRST-RUN ONBOARDING -->
+  <div id="onboardingView" class="view-container" style="display: none;">
+    <div class="onboarding">
+      <img src="VeilX_logo.png" alt="VeilX Logo" class="logo-hero-img" />
+      <div class="onboarding-title">VeilX Wallet</div>
+      <div class="onboarding-sub">
+        Self-custodial shielded Zcash wallet powered by in-browser Halo 2 zero-knowledge proofs.
+      </div>
+
+      <button id="btnCreateNewWallet" class="btn-primary" style="margin-bottom: 8px;">
+        <span>Create New Wallet</span>
+      </button>
+      <button id="btnImportWalletToggle" class="btn-secondary">
+        <span>Import Existing Seed Phrase</span>
+      </button>
+
+      <!-- Import form -->
+      <div id="importFormBox" style="display: none; margin-top: 16px; text-align: left;">
+        <div class="field">
+          <label>Secret Recovery Phrase (12 or 24 words)</label>
+          <textarea id="importMnemonicInput" rows="3" placeholder="word1 word2 word3..."></textarea>
+        </div>
+        <div class="field">
+          <label>Wallet Birthday Height (Optional)</label>
+          <input id="importBirthdayInput" type="number" placeholder="e.g. 3518200 (speeds up sync)" />
+        </div>
+        <div class="field">
+          <label>Set Vault Password (Optional)</label>
+          <input id="importPasswordInput" type="password" placeholder="Min. 8 characters" />
+        </div>
+        <button id="btnConfirmImport" class="btn-primary" style="margin-bottom: 6px;">Import &amp; Open Wallet</button>
+        <button id="btnCancelImport" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW 2: BACKUP SEED PHRASE & DYNAMIC BIRTHDAY HEIGHT -->
+  <div id="backupSeedView" class="view-container" style="display: none;">
+    <div class="content">
+      <div style="font-size: 15px; font-weight: 700; margin-bottom: 4px;">Secret Recovery Phrase</div>
+      <p style="font-size: 11px; color: var(--muted); line-height: 1.4; margin-bottom: 12px;">
+        Record these 24 words in order and store them in a secure offline location.
+      </p>
+
+      <div id="seedGridBox" class="seed-grid"></div>
+
+      <!-- Live Blockchain Birthday Height -->
+      <div class="birthday-card">
+        <div>
+          <div class="birthday-label">Wallet Birthday Height</div>
+          <div id="backupBirthdayText" class="birthday-val">Syncing chain tip...</div>
+          <div class="birthday-desc">Record this block height to restore instantly without scanning block 0.</div>
+        </div>
+        <button id="btnCopyBirthday" class="btn-secondary" style="width: auto; padding: 4px 8px; font-size: 10px;" title="Copy Birthday Height">Copy</button>
+      </div>
+
+      <button id="btnCopySeedPhrase" class="btn-secondary" style="margin-bottom: 12px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <span>Copy Seed Phrase</span>
+      </button>
+
+      <div class="field">
+        <label>Set Password (Optional)</label>
+        <input id="createPasswordInput" type="password" placeholder="Protect your wallet on this browser" />
+      </div>
+
+      <button id="btnFinishSetup" class="btn-primary">I Have Backed Up My Wallet</button>
+    </div>
+  </div>
+
+  <!-- VIEW 3: UNLOCKED MAIN WALLET -->
+  <div id="mainWalletView" class="view-container" style="display: none;">
+    <div class="content">
+      <!-- TAB: HOME / WALLET -->
+      <div id="tab-home" class="tab-pane active">
+        <!-- Hero Balance -->
+        <div class="hero">
+          <div class="hero-label">Total Balance</div>
+          <div class="hero-balance" id="heroBalNumberText">
+            0.0000<span class="unit" id="heroBalDenomText">TAZ</span>
+          </div>
+          <div class="hero-breakdown-pill">
+            <span>Shielded: <strong id="shieldedBalText">0.0000</strong></span>
+            <span>&bull;</span>
+            <span>Transparent: <strong id="transparentBalText">0.0000</strong></span>
+          </div>
+        </div>
+
+        <!-- Primary Dual Actions: Send & Receive -->
+        <div class="actions-dual">
+          <button class="action-btn-primary" id="btnNavSendQuick">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
+            <span>Send</span>
+          </button>
+          <button class="action-btn-primary" id="btnNavReceiveQuick">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="17" y1="7" x2="7" y2="17"/><polyline points="17 17 7 17 7 7"/></svg>
+            <span>Receive</span>
+          </button>
+        </div>
+
+        <!-- 1-Click Unified Address Card -->
+        <div class="card">
+          <div class="card-title">
+            <span>Unified Address</span>
+            <button id="btnCopyActiveAddr" style="background:none; border:none; color:var(--gold); font-size:11px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:4px;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>Copy</span>
+            </button>
+          </div>
+          <div id="activeAddressBox" class="mono-box" style="cursor: pointer;" title="Click to copy Unified Address"></div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+            <span id="addrNoticeText" style="font-size: 10px; color: #34d399;">Shielded (Orchard) &amp; Transparent</span>
+            <a id="addrExplorerLink" href="#" target="_blank" style="color: var(--muted); font-size: 10px; text-decoration: none;">View Explorer &nearr;</a>
+          </div>
+        </div>
+
+        <!-- Recent Activity Section -->
+        <div class="card">
+          <div class="card-title">
+            <span>Recent Activity</span>
+            <button id="refreshBalBtn" style="background:none; border:none; color:var(--muted); font-size:11px; cursor:pointer; display:inline-flex; align-items:center; gap:3px;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>Sync</span>
+            </button>
+          </div>
+          <div id="txHistoryList">
+            <div style="text-align: center; padding: 18px 0; color: var(--subtle); font-size: 11px;">
+              No recent transactions recorded.
+            </div>
+          </div>
+        </div>
+
+        <!-- Hidden legacy hooks for popup.js backward compatibility -->
+        <div style="display:none;">
+          <span id="totalBalText"></span>
+          <span id="heroLabelText"></span>
+          <span id="heroSubText"></span>
+          <div id="syncStatusBadge"></div>
+          <div id="syncStatusText"></div>
+          <div id="syncProgressBar"><div id="syncProgressFill"></div></div>
+          <a id="viewOnExplorerLink" href="#"></a>
+          <button id="faucetQuickBtn"></button>
+          <button id="openFaucetBtn"></button>
+          <input id="txidClaimInput" />
+          <button id="btnVerifyClaim"></button>
+          <div id="claimResultToast"></div>
+          <div id="autoShieldBanner"><span id="autoShieldAmountText"></span><button id="btnAutoShieldNow"></button></div>
+          <div id="rowShieldedPool"></div>
+          <div id="rowTransparentPool"></div>
+          <div id="txHistoryCard"><span id="txHistoryCountBadge"></span></div>
+        </div>
+      </div>
+
+      <!-- TAB: SEND -->
+      <div id="tab-send" class="tab-pane">
+        <div class="card">
+          <div class="card-title">Send Transaction</div>
+
+          <div class="field">
+            <label>Recipient Address</label>
+            <div class="input-with-action">
+              <input id="sendToInput" type="text" placeholder="utest1... or ztestsapling1... or tm..." />
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:4px;">
+              <span id="recipientTypeBadge" class="badge badge-amber" style="display:none;"></span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Amount (TAZ)</label>
+            <div class="input-with-action">
+              <input id="sendAmountInput" type="number" step="0.0001" min="0" placeholder="0.0000" />
+              <button class="input-pill-btn" id="btnSendMax">MAX</button>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:3px; font-size:10px; color:var(--subtle);">
+              <span>Available: <strong id="sendAvailableText" style="color:var(--text);">0.0000</strong></span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Encrypted Memo (Optional for Shielded)</label>
+            <input id="sendMemoInput" type="text" placeholder="Enter encrypted memo..." />
+          </div>
+
+          <!-- Fee & Total Summary -->
+          <div style="background:#090a0f; border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin: 10px 0; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; color:var(--muted); margin-bottom:3px;">
+              <span>Network Fee (ZIP-317)</span>
+              <span id="feeEstimateText" style="font-family:monospace; color:var(--text);">0.0001 TAZ</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-weight:600;">
+              <span>Estimated Deduction</span>
+              <span id="totalDeductionText" style="font-family:monospace; color:var(--gold);">0.0000 TAZ</span>
+            </div>
+          </div>
+
+          <button id="signAndSendBtn" class="btn-primary">
+            <span>Review &amp; Send</span>
+          </button>
+          <div id="sendToast" class="toast"></div>
+
+          <!-- Broadcast confirmation card -->
+          <div id="txOutputCard" class="card" style="display:none; margin-top:12px; background:rgba(16,185,129,0.06); border-color:rgba(16,185,129,0.3);">
+            <div style="font-size:11px; font-weight:700; color:#34d399; margin-bottom:4px;">Transaction Broadcast Successfully</div>
+            <div id="signedTxIdText" class="mono-box" style="margin-bottom:8px; font-size:10px;"></div>
+            <div style="display:flex; gap:6px;">
+              <button id="btnCopySignedTxId" class="btn-secondary" style="flex:1; font-size:11px;">Copy TxID</button>
+              <button id="btnViewTxInExplorer" class="btn-secondary" style="flex:1; font-size:11px;">View Explorer</button>
+            </div>
+            <div id="signedRawHexBox" style="display:none;"></div>
+          </div>
+
+          <!-- Hidden legacy pool buttons for backwards compatibility -->
+          <div style="display:none;">
+            <button id="btnSourcePoolAuto"></button>
+            <button id="btnSourcePoolShielded"></button>
+            <button id="btnSourcePoolTransparent"></button>
+            <span id="sourceAutoAvailText"></span>
+            <span id="sourceShieldedAvailText"></span>
+            <span id="sourceTransAvailText"></span>
+            <span id="autoPoolBadge"></span>
+            <span id="actionsCountText"></span>
+            <div id="sendNoticeBanner"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB: RECEIVE -->
+      <div id="tab-receive" class="tab-pane">
+        <div class="card" style="text-align: center;">
+          <div class="card-title" style="justify-content:center;">Receive Funds</div>
+          <p style="font-size:11px; color:var(--muted); line-height:1.4; margin-bottom:12px;">
+            Your Unified Address automatically routes incoming funds into your shielded or transparent balance.
+          </p>
+
+          <!-- SVG QR Placeholder / Canvas -->
+          <div class="qr-box">
+            <canvas id="recvQrCanvas" width="140" height="140" style="display:block;"></canvas>
+          </div>
+
+          <div class="field" style="text-align: left; margin-top: 8px;">
+            <label>Unified Address</label>
+            <div id="recvUnifiedBox" class="mono-box" style="cursor: pointer; max-height: 70px; overflow-y: auto;"></div>
+          </div>
+
+          <button id="copyUaAddrBtn" class="btn-primary" style="margin-bottom: 12px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span>Copy Unified Address</span>
+          </button>
+
+          <!-- Collapsible Legacy Addresses for older faucets -->
+          <details style="text-align: left; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;">
+            <summary>Legacy Addresses (for faucets that do not support ZIP-316)</summary>
+            <div style="margin-top: 8px;">
+              <div class="field">
+                <label>Sapling Address</label>
+                <div id="recvSaplingBox" class="mono-box" style="font-size: 10px;"></div>
+                <button id="copySaplingAddrBtn" class="btn-secondary" style="margin-top: 4px; padding: 5px 8px; font-size: 10px;">Copy Sapling</button>
+              </div>
+              <div class="field" style="margin-top: 8px;">
+                <label>Transparent Address</label>
+                <div id="recvTransparentBox" class="mono-box" style="font-size: 10px;"></div>
+                <button id="copyTransAddrBtn" class="btn-secondary" style="margin-top: 4px; padding: 5px 8px; font-size: 10px;">Copy Transparent</button>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- TAB: SETTINGS -->
+      <div id="tab-settings" class="tab-pane">
+        <!-- Secret Phrase -->
+        <div class="card">
+          <div class="card-title">Secret Recovery Phrase</div>
+          <p style="font-size:11px; color:var(--muted); margin-bottom:8px;">
+            View or back up your 24-word secret recovery phrase:
+          </p>
+          <button id="btnRevealSeedPhrase" class="btn-secondary">Reveal 24-Word Seed Phrase</button>
+          <div id="revealedSeedGridBox" class="seed-grid" style="display:none; margin-top:8px;"></div>
+        </div>
+
+        <!-- Wallet Birthday Height -->
+        <div class="card">
+          <div class="card-title">
+            <span>Wallet Birthday Height</span>
+            <span class="badge badge-emerald">ZIP-307</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div id="settingsBirthdayText" class="birthday-val">Syncing...</div>
+              <div style="font-size:10px; color:var(--subtle); margin-top:2px;">Block height at creation time.</div>
+            </div>
+            <button id="btnCopySettingsBirthday" class="btn-secondary" style="width:auto; padding:4px 8px; font-size:10px;">Copy</button>
+          </div>
+        </div>
+
+        <!-- Unified Full Viewing Key (UFVK) -->
+        <div class="card">
+          <div class="card-title">
+            <span>Viewing Key (UFVK)</span>
+            <span class="badge badge-emerald">ZIP-316</span>
+          </div>
+          <p style="font-size:11px; color:var(--muted); margin-bottom:8px; line-height:1.4;">
+            Watch-only key to monitor balances &amp; incoming payments with zero spending authority.
+          </p>
+          <button id="btnExportUfvk" class="btn-secondary">Export Viewing Key (UFVK)</button>
+          <div id="ufvkDisplayBox" style="display:none; margin-top:8px;">
+            <div id="ufvkTextBox" style="word-break:break-all; font-family:monospace; font-size:10px; background:#090a0f; border:1px solid var(--border); border-radius:8px; padding:9px; color:#34d399; max-height:80px; overflow-y:auto; cursor:pointer;" title="Click to copy"></div>
+            <div style="display:flex; gap:6px; margin-top:6px;">
+              <button id="btnCopyUfvk" class="btn-secondary" style="flex:1; font-size:11px;">Copy UFVK</button>
+              <button id="btnHideUfvk" class="btn-secondary" style="flex:1; font-size:11px;">Hide</button>
+            </div>
+          </div>
+          <div id="ufvkToast" class="toast"></div>
+        </div>
+
+        <!-- Vault Security & Password -->
+        <div class="card">
+          <div class="card-title">
+            <span>Security &amp; Encryption</span>
+            <span id="vaultSecurityBadge" class="badge badge-emerald">AES-GCM-256</span>
+          </div>
+          <p id="vaultSecurityDesc" style="font-size:11px; color:var(--muted); margin-bottom:8px;">
+            Keys encrypted with AES-GCM-256 and PBKDF2 (100,000 rounds).
+          </p>
+          <div class="field" id="setPasswordBox" style="display:none; margin-bottom:8px;">
+            <label>Set / Change Password</label>
+            <input id="settingsPasswordInput" type="password" placeholder="Enter password (min. 4 chars)..." />
+            <button id="btnSaveNewPassword" class="btn-primary" style="margin-top:6px;">Update Password</button>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button id="btnTogglePasswordChange" class="btn-secondary" style="flex:1; font-size:11px;">Set Password</button>
+            <button id="btnLockWalletNow" class="btn-secondary" style="flex:1; font-size:11px; color:var(--gold); border-color:rgba(245,158,11,0.3);">Lock Wallet</button>
+          </div>
+          <div id="vaultSecurityToast" class="toast"></div>
+        </div>
+
+        <!-- Network & Node Configuration -->
+        <div class="card">
+          <div class="card-title">
+            <span>Network</span>
+            <span id="activeNetworkBadge" class="badge badge-emerald">Testnet</span>
+          </div>
+          <div style="display:flex; gap:6px; margin-bottom:10px;">
+            <button id="btnSwitchTestnet" class="btn-secondary active" style="flex:1; border-color:var(--gold); color:var(--gold); font-size:11px;">
+              Testnet (0x37A5165B)
+            </button>
+            <button id="btnSwitchMainnet" class="btn-secondary" style="flex:1; font-size:11px;">
+              Mainnet (0xC2D6D0B4)
+            </button>
+          </div>
+          <div class="field">
+            <label>Zebra Node Endpoint</label>
+            <input id="rpcInput" type="text" placeholder="http://127.0.0.1:18232" />
+          </div>
+          <button id="btnSaveRpc" class="btn-secondary" style="font-size:11px;">Save Node URL</button>
+          <div id="settingsToast" class="toast"></div>
+          <div id="networkToast" class="toast"></div>
+        </div>
+
+        <!-- Shielded Prover & Resync -->
+        <div class="card">
+          <div class="card-title">Shielded Prover &amp; Sync</div>
+          <p style="font-size:11px; color:var(--muted); line-height:1.4; margin-bottom:8px;">
+            Resync compact blocks and trial-decrypt shielded notes from current chain tip:
+          </p>
+          <button id="btnFastResyncShielded" class="btn-secondary" style="color:var(--gold); border-color:rgba(245,158,11,0.3);">
+            Fast Resync Shielded Notes
+          </button>
+          <div id="resyncShieldedToast" class="toast"></div>
+        </div>
+
+        <!-- Danger Zone -->
+        <div class="card" style="border-color: rgba(239, 68, 68, 0.25);">
+          <div class="card-title" style="color:var(--danger);">Danger Zone</div>
+          <button id="btnResetWallet" class="btn-secondary" style="color:var(--danger); border-color:rgba(239,68,68,0.3);">
+            Reset Wallet &amp; Remove Data
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Tab Navigation (SVG Vector Icons, Zero Emojis) -->
+    <div class="bottom-nav">
+      <button class="nav-item active" data-tab="tab-home">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M16 12h4"/><circle cx="16" cy="12" r="1"/></svg>
+        <span>Wallet</span>
+      </button>
+      <button class="nav-item" data-tab="tab-send">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
+        <span>Send</span>
+      </button>
+      <button class="nav-item" data-tab="tab-receive">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="17" y1="7" x2="7" y2="17"/><polyline points="17 17 7 17 7 7"/></svg>
+        <span>Receive</span>
+      </button>
+      <button class="nav-item" data-tab="tab-settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Settings</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- TRANSACTION REVIEW / CONFIRMATION MODAL -->
+  <div id="txReviewModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span>Review Transaction</span>
+      </div>
+
+      <div class="review-row">
+        <span class="review-label">Recipient</span>
+        <div class="review-val" id="reviewRecipient" style="font-size:10px; max-width:200px; overflow:hidden; text-overflow:ellipsis;"></div>
+      </div>
+      <div class="review-row">
+        <span class="review-label">Receiver Type</span>
+        <span class="badge badge-blue" id="reviewRecipientType">Shielded</span>
+      </div>
+      <div class="review-row" style="margin-top: 4px;">
+        <span class="review-label">Amount</span>
+        <div class="review-val highlight" id="reviewAmount">0.0000 TAZ</div>
+      </div>
+      <div class="review-row">
+        <span class="review-label">Network Fee (ZIP-317)</span>
+        <div class="review-val" id="reviewFee" style="color: var(--muted);">0.0001 TAZ</div>
+      </div>
+      <div class="review-divider"></div>
+      <div class="review-row" style="align-items: center;">
+        <span class="review-label" style="font-weight: 700; color: #fff;">Total Deduction</span>
+        <div class="review-val total" id="reviewTotal">0.0001 TAZ</div>
+      </div>
+      <div class="review-row" style="margin-top: 6px;">
+        <span class="review-label">From Account</span>
+        <div class="review-val" id="reviewFromAddress" style="font-size: 10px; color: var(--subtle);"></div>
+      </div>
+
+      <div id="reviewStatusBox" style="display: none; margin: 10px 0; padding: 8px 10px; border-radius: 6px; font-size: 11px; font-family: monospace;"></div>
+
+      <div class="modal-actions" style="margin-top: 14px; display: flex; gap: 8px;">
+        <button id="btnCancelTx" class="btn-secondary" style="flex: 1;">Cancel</button>
+        <button id="btnConfirmTx" class="btn-primary" style="flex: 2;">Confirm &amp; Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="wallet-core.bundle.js"></script>
+  <script src="qrcodegen.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

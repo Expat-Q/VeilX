@@ -1,0 +1,17 @@
+{
+  "name": "veilx-wallet",
+  "type": "module",
+  "description": "VeilX Shielded & Transparent Zcash NU7/Ironwood WebAssembly Engine",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    "veilx_wallet_bg.wasm",
+    "veilx_wallet.js",
+    "veilx_wallet.d.ts"
+  ],
+  "main": "veilx_wallet.js",
+  "types": "veilx_wallet.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

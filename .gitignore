@@ -1,0 +1,94 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Next.js build output
+/.next/
+/out/
+/build
+/dist
+
+# Rust / WebAssembly build artifacts
+/target/
+**/target/
+Cargo.lock
+
+# Environment variables & secrets (CRITICAL)
+.env
+.env*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+!.env.example
+
+# Cryptographic Keys, Certificates & Wallet Credentials
+*.pem
+*.key
+*.cert
+*.crt
+*.seed
+*.secret
+*.wallet
+*.credentials
+*.keystore
+*id_rsa*
+*id_ed25519*
+secrets/
+credentials.json
+serviceAccountKey.json
+token.json
+auth.json
+
+# Database & SQLite dumps
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+/dump/
+
+# TypeScript build cache
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+*.backup
+
+# Vercel & AI cache
+.vercel
+.gemini/
+
+# Scratch & Temporary documentation files
+NexPlay*
+
+# Extension build outputs & large binary archives (>50MB)
+/extensions/**/dist/
+/extensions/**/chrome-extension/*.wasm
+*.zip
+*.tar.gz
+

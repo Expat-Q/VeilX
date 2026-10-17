@@ -1,0 +1,33 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const build_and_prove_orchard_bundle: (a: any) => [number, number, number];
+export const build_and_prove_orchard_spend: (a: any) => [number, number, number];
+export const build_and_sign_transaction: (a: any) => [number, number, number];
+export const calculate_zip317_fee: (a: number, b: number) => bigint;
+export const decode_unified_address: (a: number, b: number) => [number, number, number];
+export const decode_unified_full_viewing_key: (a: number, b: number) => [number, number, number];
+export const derive_account: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const derive_address_from_ufvk: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const derive_orchard_account: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const export_unified_full_viewing_key: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const generate_seed_phrase: (a: number) => [number, number, number, number];
+export const get_active_branch_ids: () => any;
+export const recover_outgoing_orchard_output: (a: any) => [number, number, number];
+export const tree_append_commitments: (a: number, b: number) => [number, number, number, number];
+export const tree_create_checkpoint: (a: number, b: number, c: number) => [number, number];
+export const tree_export_state: () => [number, number, number];
+export const tree_get_anchor: () => [number, number, number, number];
+export const tree_import_state: (a: any) => [number, number];
+export const tree_rewind_to_height: (a: number) => [number, number, number, number];
+export const tree_track_note: (a: number, b: number) => [number, number];
+export const try_decrypt_orchard_output: (a: any) => [number, number, number];
+export const validate_seed_phrase: (a: number, b: number) => number;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_start: () => void;

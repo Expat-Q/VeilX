@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # 1. MongoDB Service (Local Database)
+  mongodb:
+    image: mongo:7.0
+    container_name: xtip-mongodb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=xtip
+
+  # 2. Zebra Consensus Node (Zcash Testnet - NU6.3 Ironwood)
+  zebra:
+    image: zfnd/zebra:latest
+    container_name: xtip-zebra
+    restart: unless-stopped
+    environment:
+      - ZEBRA_CONF_NETWORK=Testnet
+    ports:
+      - "127.0.0.1:18233:18233" # Zebra RPC
+    volumes:
+      - zebra-data:/var/lib/zebrad
+
+  # 3. Zallet Wallet Service (Rust JSON-RPC Wallet Daemon)
+  zallet:
+    image: zcash/zallet:latest
+    container_name: xtip-zallet
+    restart: unless-stopped
+    depends_on:
+      - zebra
+    ports:
+      - "127.0.0.1:18232:18232" # Zallet JSON-RPC
+    environment:
+      - ZALLET_RPC_USER=xtip_user
+      - ZALLET_RPC_PASS=xtip_password_123
+      - ZALLET_ZEBRA_RPC=http://zebra:18233
+    volumes:
+      - zallet-data:/var/lib/zallet
+
+volumes:
+  mongo-data:
+  zebra-data:
+  zallet-data:

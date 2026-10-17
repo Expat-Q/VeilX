@@ -1,0 +1,45 @@
+{
+  "name": "xtip",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "npx tsx tests/regression-sprint.test.ts && npx tsx tests/failure-scenarios.test.ts && npx tsx tests/swap-settlement.test.ts && npx tsx tests/escrow-forwarder.test.ts && npx tsx tests/auth-reconciliation.test.ts && npx tsx tests/financial-validation.test.ts && npx tsx tests/phase1-critical-fixes.test.ts && npx tsx tests/phase2-api-security.test.ts && npx tsx tests/phase4-infra-schema.test.ts",
+    "test:regression": "npx tsx tests/regression-sprint.test.ts",
+    "test:failure": "npx tsx tests/failure-scenarios.test.ts",
+    "test:critical": "npx tsx tests/critical-remediation.test.ts",
+    "test:integrity": "npx tsx tests/payment-integrity.test.ts",
+    "wallet:nu7": "node --no-warnings --experimental-strip-types extensions/nu7-wallet/src/cli/nu7-cli.ts",
+    "test:nu7": "node --no-warnings --experimental-strip-types extensions/nu7-wallet/tests/nu7-wallet.test.ts",
+    "build:extension": "node extensions/nu7-wallet/scripts/package-extension.js"
+  },
+  "dependencies": {
+    "@noir-wallet/sdk": "^0.1.9",
+    "clsx": "^2.1.1",
+    "dotenv": "^16.4.5",
+    "framer-motion": "^11.11.9",
+    "lucide-react": "^0.453.0",
+    "mongoose": "^8.7.1",
+    "next": "14.2.15",
+    "qrcode.react": "^4.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.4",
+    "zod": "^3.23.8",
+    "zprotocol-webzjs-wallet": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.11",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "14.2.15",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.6.3"
+  }
+}

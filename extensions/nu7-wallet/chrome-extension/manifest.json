@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "VeilX Shielded Wallet",
+  "version": "1.1.0",
+  "description": "Self-custodial Zcash testnet wallet with WebAssembly Halo 2 Orchard prover & transparent ZIP-225 v5 engine.",
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "permissions": ["storage", "activeTab", "offscreen"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "host_permissions": ["http://localhost:*/*", "http://127.0.0.1:*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "VeilX Shielded Wallet (0x37A5165B)",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:*/*", "http://127.0.0.1:*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "inpage.js",
+        "VeilX_logo.png",
+        "icon-128.png",
+        "offscreen.html",
+        "offscreen.js",
+        "veilx_wallet.js",
+        "veilx_wallet_bg.wasm",
+        "webzjs_wallet.js",
+        "webzjs_wallet_bg.wasm",
+        "wasm_thread_worker.js",
+        "atomics_worker.js",
+        "snippets/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

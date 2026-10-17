@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #FAF6EE;
+    --foreground: #1E1315;
+    --card: #FFFFFF;
+    --card-foreground: #1E1315;
+    --border: #EDE3CC;
+    --primary: #1E1315;
+    --primary-foreground: #FFFFFF;
+    --secondary: #2C1A1E;
+    --secondary-foreground: #FFFFFF;
+    --muted: #755B62;
+    --muted-foreground: #755B62;
+  }
+
+  * {
+    border-color: #EDE3CC;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #FAF6EE;
+    color: #1E1315;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Explicit Butter & Brown Core System */
+.bg-butter-50 { background-color: #FDFBF5 !important; }
+.bg-butter-100 { background-color: #FAF6EE !important; }
+.bg-butter-200 { background-color: #F5EEDD !important; }
+.bg-butter-300 { background-color: #EDE3CC !important; }
+
+.bg-brown-950 { background-color: #140C0E !important; }
+.bg-brown-900 { background-color: #1E1315 !important; }
+.bg-brown-850 { background-color: #24171A !important; }
+.bg-brown-800 { background-color: #2C1A1E !important; }
+
+.text-brown-950 { color: #140C0E !important; }
+.text-brown-900 { color: #1E1315 !important; }
+.text-brown-800 { color: #2C1A1E !important; }
+.text-brown-700 { color: #3D282D !important; }
+.text-brown-600 { color: #5A4046 !important; }
+.text-brown-500 { color: #755B62 !important; }
+.text-brown-400 { color: #967E85 !important; }
+.text-brown-300 { color: #BFAFB4 !important; }
+
+.border-butter-200 { border-color: #F5EEDD !important; }
+.border-butter-300 { border-color: #EDE3CC !important; }
+.border-butter-400 { border-color: #DECFA8 !important; }
+.border-brown-800 { border-color: #2C1A1E !important; }
+.border-brown-900 { border-color: #1E1315 !important; }
+
+/* Custom refined smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FAF6EE;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #EDE3CC;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #755B62;
+}
+
+/* Continuous Moving Marquee Animation */
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee 26s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}

@@ -1,0 +1,47 @@
+name: XTip Production CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-and-build:
+    name: Lint, Test & Production Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      NODE_ENV: test
+      SESSION_SECRET: ci_session_secret_test_32_characters_long
+      NEXT_PUBLIC_ZCASH_NETWORK: testnet
+      ENABLE_TESTNET_SIMULATION: "false"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Code Quality & Linting
+        run: npm run lint
+
+      - name: TypeScript Type Checking
+        run: npx tsc --noEmit
+
+      - name: Run Payment Integrity & Regression Test Suites
+        run: npm test
+
+      - name: Production Next.js Build
+        env:
+          NODE_ENV: production
+          SESSION_SECRET: ci_production_secret_key_32_bytes_long!
+        run: npm run build

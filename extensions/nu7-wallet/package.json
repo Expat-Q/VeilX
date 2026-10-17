@@ -1,0 +1,22 @@
+{
+  "name": "@veilx/nu7-wallet",
+  "version": "1.0.0",
+  "description": "Standalone Zcash NU7 Testnet Wallet Extension & SDK (Consensus Branch 0x77190AD9, ZIP-225 v5, ZIP-244)",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "cli": "node --no-warnings --experimental-strip-types src/cli/nu7-cli.ts",
+    "test": "node --no-warnings --experimental-strip-types tests/nu7-wallet.test.ts",
+    "bundle": "node scripts/bundle-extension.js",
+    "build:extension": "node scripts/package-extension.js"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "bs58": "^6.0.0"
+  },
+  "optionalDependencies": {
+    "@chainsafe/webzjs-wallet": "^0.3.0"
+  }
+}
