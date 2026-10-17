@@ -3,7 +3,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { bytesToHex } from "@noble/hashes/utils";
 import { publicKeyToAddress } from "@noir-wallet/sdk";
 import type { Network } from "@noir-wallet/sdk";
-import { validateZcashAddressFull, ZcashAddressValidationResult } from "./zcash-address";
+import { validateZcashAddressFull, ZcashAddressValidationResult, p2pkhHexToAddress } from "./zcash-address";
 import { ufvkWatcher, CompactActionInput, DecryptedEscrowNote, getWasmEngine } from "./escrow/ufvk-watcher";
 import { checkPayoutCircuitBreaker } from "./payout-controls";
 
@@ -340,7 +340,8 @@ export class ZalletClient {
         },
       ];
 
-      const opidOrTxid = await this.call<string>("z_sendmany", ["0", recipients, 1, 0.0001]);
+      const fromAddr = process.env.ESCROW_PLATFORM_TRANSPARENT_ADDRESS || "ANY_TADDR";
+      const opidOrTxid = await this.call<string>("z_sendmany", [fromAddr, recipients, 1, 0.0001]);
       if (typeof opidOrTxid === "string") {
         if (opidOrTxid.startsWith("opid-")) {
           const pollResult = await this.pollOperationStatus(opidOrTxid, 15, 1000);
@@ -355,12 +356,18 @@ export class ZalletClient {
         return { txid: opidOrTxid, isAsync: false };
       }
     } catch (nodeErr: any) {
-      // If error is NOT "Method not found", rethrow if not in simulation
-      const isMethodNotFound = nodeErr.message?.includes("Method not found") || nodeErr.message?.includes("-32601");
-      if (!isMethodNotFound && !ALLOW_PAYMENT_SIMULATION) {
-        throw new Error(`Node payout failed: ${nodeErr.message}`);
+      // If node lacks internal wallet (-disablewallet=1) or returns method/parameter error,
+      // gracefully proceed to autonomous local Wasm signing engine below
+      const isWalletError =
+        nodeErr.message?.includes("Method not found") ||
+        nodeErr.message?.includes("-32601") ||
+        nodeErr.message?.includes("-4") ||
+        nodeErr.message?.includes("-5") ||
+        nodeErr.message?.includes("wallet");
+      if (!isWalletError && !ALLOW_PAYMENT_SIMULATION) {
+        console.warn(`[Node RPC] z_sendmany failed, attempting local Wasm signing fallback: ${nodeErr.message}`);
       }
-      // If method is not found (-disablewallet=1), proceed to autonomous local Wasm signing below!
+      // Proceed to autonomous local Wasm signing below!
     }
 
     // 2. Autonomous Local Wasm Transaction Builder & Broadcaster
@@ -475,6 +482,23 @@ export class ZalletClient {
         }
 
         // Check transparent outputs (vout)
+        // If expectedAddress is a Unified Address, decode its embedded transparent receiver (t1... or tm...)
+        const targetAddresses = new Set<string>([expectedAddress]);
+        if (expectedAddress.startsWith("u1") || expectedAddress.startsWith("utest1")) {
+          try {
+            const wasm = await getWasmEngine();
+            if (wasm && typeof wasm.decode_unified_address === "function") {
+              const decoded = wasm.decode_unified_address(expectedAddress);
+              if (decoded && decoded.p2pkh_hex) {
+                const tAddr = p2pkhHexToAddress(decoded.p2pkh_hex, network);
+                targetAddresses.add(tAddr);
+              }
+            }
+          } catch (err: any) {
+            console.warn("[verifyPaymentTransaction] Could not decode Unified Address transparent receiver:", err?.message || err);
+          }
+        }
+
         let totalPaidToTarget = 0;
         if (Array.isArray(rawTx.vout)) {
           for (const out of rawTx.vout) {
@@ -485,7 +509,7 @@ export class ZalletClient {
             if (typeof out.scriptPubKey?.address === "string") {
               addresses.push(out.scriptPubKey.address);
             }
-            if (addresses.includes(expectedAddress)) {
+            if (addresses.some((a) => targetAddresses.has(a))) {
               totalPaidToTarget += out.value || 0;
             }
           }

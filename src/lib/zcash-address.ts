@@ -66,6 +66,57 @@ function decodeBase58Check(address: string): { prefix: number[]; payload: number
 }
 
 /**
+ * Encodes a 2-byte network prefix and payload into a Base58Check string with double SHA-256 checksum.
+ */
+export function encodeBase58Check(prefix: number[], payload: number[] | Uint8Array): string {
+  const data = new Uint8Array([...prefix, ...payload]);
+  const hash1 = sha256(data);
+  const hash2 = sha256(hash1);
+  const checksum = hash2.slice(0, 4);
+
+  const fullBytes = new Uint8Array([...data, ...checksum]);
+  const digits: number[] = [0];
+
+  for (let i = 0; i < fullBytes.length; i++) {
+    let carry = fullBytes[i];
+    for (let j = 0; j < digits.length; j++) {
+      carry += digits[j] << 8;
+      digits[j] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = (carry / 58) | 0;
+    }
+  }
+
+  let leadingZeroes = 0;
+  for (let i = 0; i < fullBytes.length && fullBytes[i] === 0; i++) {
+    leadingZeroes++;
+  }
+
+  digits.reverse();
+  let result = "1".repeat(leadingZeroes);
+  for (const d of digits) {
+    result += ALPHABET[d];
+  }
+  return result;
+}
+
+/**
+ * Derives the transparent P2PKH address (t1... or tm...) from a 20-byte hash160 hex string.
+ */
+export function p2pkhHexToAddress(p2pkhHex: string, network: Network = "mainnet"): string {
+  const cleanHex = p2pkhHex.replace(/^0x/, "").trim();
+  const bytes: number[] = [];
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
+  }
+  const prefix = network === "mainnet" ? [0x1c, 0xb8] : [0x1d, 0x25];
+  return encodeBase58Check(prefix, bytes);
+}
+
+/**
  * Bech32 & Bech32m Polymod Checksum Calculator
  */
 function bech32Polymod(values: number[]): number {

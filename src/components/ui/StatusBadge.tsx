@@ -57,6 +57,16 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
       styles: "bg-emerald-50 text-emerald-900 border-emerald-200/80",
       dot: "bg-emerald-500",
     },
+    FORWARD_PENDING: {
+      label: "Payout Pending",
+      styles: "bg-amber-50 text-amber-900 border-amber-200/80 animate-pulse",
+      dot: "bg-amber-500",
+    },
+    SETTLING: {
+      label: "Settling...",
+      styles: "bg-gold-50 text-gold-900 border-gold-200/80 animate-pulse",
+      dot: "bg-gold-500",
+    },
   };
 
   const current = config[normalized] || {

@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
-export type RequestStatus = "PENDING" | "ACCEPTED" | "CANCELLED" | "FULFILLED";
+export type RequestStatus = "PENDING" | "ACCEPTED" | "CANCELLED" | "SETTLING" | "FORWARD_PENDING" | "FULFILLED";
 
 export interface IPaymentRequest extends Document {
   requesterUserId: mongoose.Types.ObjectId;
@@ -15,6 +15,8 @@ export interface IPaymentRequest extends Document {
   status: RequestStatus;
   paidTxid?: string;
   forwardTxid?: string;
+  forwardOpid?: string;
+  payoutError?: string;
   paidAt?: Date;
   cancelledByRole?: "target" | "requester";
   cancelledByUsername?: string;
@@ -35,10 +37,12 @@ const PaymentRequestSchema = new Schema<IPaymentRequest>(
     diversifierIndex: { type: String },
     status: {
       type: String,
-      enum: ["PENDING", "ACCEPTED", "CANCELLED", "FULFILLED"],
+      enum: ["PENDING", "ACCEPTED", "CANCELLED", "SETTLING", "FORWARD_PENDING", "FULFILLED"],
       default: "PENDING",
       index: true,
     },
+    forwardOpid: { type: String, index: true },
+    payoutError: { type: String },
     paidTxid: {
       type: String,
       unique: true,

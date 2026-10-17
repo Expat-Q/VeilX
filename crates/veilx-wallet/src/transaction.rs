@@ -210,32 +210,47 @@ pub fn build_and_sign_v5_transaction(
     display_txid_bytes.reverse();
     let txid_hex = hex::encode(display_txid_bytes);
 
-    // 5. Sign each input under ZIP-244
+    // 5. Precompute ZIP-244 Section S.2 commitments for transparent signatures
+    let mut amounts_data = Vec::with_capacity(utxos.len() * 8);
+    let mut scripts_data = Vec::new();
+    for u in utxos {
+        amounts_data.extend_from_slice(&(u.amount_zatoshis as i64).to_le_bytes());
+        scripts_data.extend_from_slice(&write_compact_size(my_script.len()));
+        scripts_data.extend_from_slice(&my_script);
+    }
+    let amounts_sig_digest = blake2b_personal(b"ZTxTrAmountsHash", &amounts_data);
+    let scriptpubkeys_sig_digest = blake2b_personal(b"ZTxTrScriptsHash", &scripts_data);
+
+    // 6. Sign each transparent input under ZIP-244 S.2
     let mut script_sigs = Vec::with_capacity(utxos.len());
     for (i, u) in utxos.iter().enumerate() {
-        // Transparent signature digest commits to input index, scriptPubKey, and value
-        let mut sig_trans_data = Vec::new();
-        sig_trans_data.extend_from_slice(&prevouts_digest);
-        sig_trans_data.extend_from_slice(&sequences_digest);
-        sig_trans_data.extend_from_slice(&outputs_digest);
-
-        // Input-specific commitment
-        let mut input_data = Vec::new();
-        let mut txid_bytes = hex::decode(&u.txid).unwrap();
+        // S.2g: txin_sig_digest (prevout || value || scriptPubKey || nSequence)
+        let mut txin_data = Vec::new();
+        let mut txid_bytes = hex::decode(&u.txid)
+            .map_err(|e| format!("Invalid UTXO txid hex: {}", e))?;
         txid_bytes.reverse();
-        input_data.extend_from_slice(&txid_bytes);
-        input_data.extend_from_slice(&u.vout.to_le_bytes());
-        input_data.extend_from_slice(&u.amount_zatoshis.to_le_bytes());
-        input_data.extend_from_slice(&write_compact_size(my_script.len()));
-        input_data.extend_from_slice(&my_script);
-        input_data.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        txin_data.extend_from_slice(&txid_bytes);
+        txin_data.extend_from_slice(&u.vout.to_le_bytes());
+        txin_data.extend_from_slice(&(u.amount_zatoshis as i64).to_le_bytes());
+        txin_data.extend_from_slice(&write_compact_size(my_script.len()));
+        txin_data.extend_from_slice(&my_script);
+        txin_data.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
 
-        let input_digest = blake2b_personal(b"Zcash_TInHash___", &input_data);
-        sig_trans_data.extend_from_slice(&(i as u32).to_le_bytes());
-        sig_trans_data.extend_from_slice(&input_digest);
+        let txin_sig_digest = blake2b_personal(b"Zcash___TxInHash", &txin_data);
 
-        let transparent_sig_digest = blake2b_personal(b"Zcash_TranspSig_", &sig_trans_data);
+        // S.2: transparent_sig_digest
+        let mut transparent_sig_data = Vec::with_capacity(1 + 32 * 6);
+        transparent_sig_data.push(0x01u8); // S.2a: SIGHASH_ALL (0x01)
+        transparent_sig_data.extend_from_slice(&prevouts_digest);
+        transparent_sig_data.extend_from_slice(&amounts_sig_digest);
+        transparent_sig_data.extend_from_slice(&scriptpubkeys_sig_digest);
+        transparent_sig_data.extend_from_slice(&sequences_digest);
+        transparent_sig_data.extend_from_slice(&outputs_digest);
+        transparent_sig_data.extend_from_slice(&txin_sig_digest);
 
+        let transparent_sig_digest = blake2b_personal(b"ZTxIdTranspaHash", &transparent_sig_data);
+
+        // Signature digest
         let mut sighash_preimage = Vec::with_capacity(128);
         sighash_preimage.extend_from_slice(&header_digest);
         sighash_preimage.extend_from_slice(&transparent_sig_digest);
@@ -261,7 +276,7 @@ pub fn build_and_sign_v5_transaction(
         script_sigs.push(script_sig);
     }
 
-    // 6. Serialize Full Version 5 Transaction
+    // 7. Serialize Full Version 5 Transaction
     let mut raw = Vec::new();
     raw.extend_from_slice(&TX_VERSION_5_HEADER);
     raw.extend_from_slice(&VERSION_GROUP_ID_V5);

@@ -117,6 +117,46 @@ export function DashboardOverview({
     }
   };
 
+  const handleRetryPayLinkForward = async (slug: string) => {
+    setIsActionLoadingMap((prev) => ({ ...prev, [slug]: true }));
+    try {
+      const res = await fetch(`/api/paylinks/${slug}/retry-forward`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        await fetchLiveActivity();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Failed to retry payout. Please check escrow status.");
+      }
+    } catch (err: any) {
+      console.error("Failed to retry paylink forward:", err);
+      alert(err.message || "Failed to retry payout.");
+    } finally {
+      setIsActionLoadingMap((prev) => ({ ...prev, [slug]: false }));
+    }
+  };
+
+  const handleRetryRequestForward = async (requestId: string) => {
+    setIsActionLoadingMap((prev) => ({ ...prev, [requestId]: true }));
+    try {
+      const res = await fetch(`/api/requests/${requestId}/retry-forward`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        await fetchLiveActivity();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Failed to retry payout. Please check escrow status.");
+      }
+    } catch (err: any) {
+      console.error("Failed to retry request forward:", err);
+      alert(err.message || "Failed to retry payout.");
+    } finally {
+      setIsActionLoadingMap((prev) => ({ ...prev, [requestId]: false }));
+    }
+  };
+
   const fetchLiveActivity = useCallback(async () => {
     try {
       const [tipsRes, reqsRes, paylinksRes] = await Promise.allSettled([
@@ -747,6 +787,31 @@ export function DashboardOverview({
                           <StatusBadge status={item.status} />
                         </div>
                       )
+                    ) : item.status === "FORWARD_PENDING" ? (
+                      <div className="flex items-center gap-1.5">
+                        {isPayLink ? (
+                          <Button
+                            onClick={() => handleRetryPayLinkForward(item.slug)}
+                            size="sm"
+                            variant="primary"
+                            disabled={isActionLoadingMap[item.slug]}
+                            className="h-7 px-2.5 text-[11px] font-bold shadow-subtle bg-amber-600 hover:bg-amber-700 text-white"
+                          >
+                            {isActionLoadingMap[item.slug] ? "Retrying..." : "Retry Payout"}
+                          </Button>
+                        ) : item.type === "request" && !item.isIncoming ? (
+                          <Button
+                            onClick={() => handleRetryRequestForward(item.id)}
+                            size="sm"
+                            variant="primary"
+                            disabled={isActionLoadingMap[item.id]}
+                            className="h-7 px-2.5 text-[11px] font-bold shadow-subtle bg-amber-600 hover:bg-amber-700 text-white"
+                          >
+                            {isActionLoadingMap[item.id] ? "Retrying..." : "Retry Payout"}
+                          </Button>
+                        ) : null}
+                        <StatusBadge status={item.status} />
+                      </div>
                     ) : (
                       <StatusBadge status={item.status} />
                     )}

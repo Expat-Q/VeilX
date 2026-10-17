@@ -163,43 +163,16 @@ VeilX is designed to be frictionless: **no seed phrases to write down and no com
 
 ---
 
-## 💻 Developer Setup
+## 🌐 Supported Protocols & Standards
 
-### Prerequisites
-* **Node.js**: `v18.17.0` or later
-* **Rust**: `1.75.0` or later (with `wasm-pack` installed for building Wasm modules)
-* **MongoDB**: Atlas cluster or local MongoDB instance
+VeilX is engineered in strict compliance with official Zcash protocol improvement proposals and cryptography standards:
 
-### Installation
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/VeilX/VeilX.git
-   cd VeilX
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-3. **Configure Environment Variables**:
-   Copy the provided configuration template and fill in your details:
-   ```bash
-   cp .env.example .env.local
-   ```
-   *(See `.env.example` for the full list of configuration fields and guides).*
-
-4. **Build the Rust WebAssembly Core**:
-   ```bash
-   wasm-pack build crates/veilx-wallet --target web --release
-   ```
-
-5. **Run the Development Server**:
-   ```bash
-   npm run dev
-   ```
-   Open [http://localhost:3000](http://localhost:3000) in your browser.
+* **ZIP-316 (Unified Addresses)**: Seamless routing across Orchard shielded, Sapling shielded, and transparent receivers within a single Bech32m address format (`u1...`).
+* **ZIP-321 (Payment Request URIs)**: Standardized deep-linking and dynamic QR code generation for universal mobile and desktop wallet compatibility.
+* **ZIP-244 (Transaction Identifier Non-Malleability)**: v5 transaction structure and non-malleable signature hashing for trustless on-chain proofs.
+* **ZIP-317 (Proportional Output Fee Mechanism)**: Dynamic, fair transaction fee calculation preventing mempool congestion and ensuring fast block confirmation.
+* **RFC 7636 (PKCE OAuth 2.0)**: Proof Key for Code Exchange protocol eliminating client secret exposure and securely linking 𝕏 identities to recipient claims.
+* **Halo2 / zk-SNARKs**: Zero-knowledge proof verification ensuring end-to-end sender and receiver confidentiality.
 
 ---
 

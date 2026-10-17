@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "npx tsx tests/regression-sprint.test.ts && npx tsx tests/failure-scenarios.test.ts && npx tsx tests/swap-settlement.test.ts && npx tsx tests/escrow-forwarder.test.ts && npx tsx tests/auth-reconciliation.test.ts && npx tsx tests/financial-validation.test.ts && npx tsx tests/phase1-critical-fixes.test.ts && npx tsx tests/phase2-api-security.test.ts && npx tsx tests/phase4-infra-schema.test.ts",
+    "test": "npx tsx tests/regression-sprint.test.ts && npx tsx tests/failure-scenarios.test.ts && npx tsx tests/swap-settlement.test.ts && npx tsx tests/escrow-forwarder.test.ts && npx tsx tests/auth-reconciliation.test.ts && npx tsx tests/financial-validation.test.ts && npx tsx tests/phase1-critical-fixes.test.ts && npx tsx tests/phase2-api-security.test.ts && npx tsx tests/phase4-infra-schema.test.ts && npx tsx tests/hybrid-payout-forward.test.ts",
     "test:regression": "npx tsx tests/regression-sprint.test.ts",
     "test:failure": "npx tsx tests/failure-scenarios.test.ts",
     "test:critical": "npx tsx tests/critical-remediation.test.ts",

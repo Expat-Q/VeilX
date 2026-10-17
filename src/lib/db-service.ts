@@ -524,13 +524,19 @@ export const dbService = {
         recipientConditions.push({ recipientUsernameSnapshot: new RegExp(`^${escapedHandle}$`, "i") });
       }
 
-      targetTips = await Tip.find({
+      const tipFilter: any = {
         $or: recipientConditions,
         status: "FUNDED",
         $and: [
           { $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }] },
         ],
-      }).lean();
+      };
+
+      if (IS_PRODUCTION || process.env.NEXT_PUBLIC_ZCASH_NETWORK === "mainnet") {
+        tipFilter.fundingTxid = { $not: /^sim_tx_/ };
+      }
+
+      targetTips = await Tip.find(tipFilter).lean();
     } else {
       targetTips = memoryStore.tips.filter((t) => {
         const isMatch =
@@ -539,7 +545,10 @@ export const dbService = {
             t.recipientXUserId.toLowerCase() === claimantHandle ||
             (t.recipientUsernameSnapshot && t.recipientUsernameSnapshot.toLowerCase() === claimantHandle)
           ));
-        return isMatch && t.status === "FUNDED" && (!t.expiresAt || new Date(t.expiresAt) > now);
+        const notSimulated =
+          !(IS_PRODUCTION || process.env.NEXT_PUBLIC_ZCASH_NETWORK === "mainnet") ||
+          !t.fundingTxid?.startsWith("sim_tx_");
+        return isMatch && t.status === "FUNDED" && notSimulated && (!t.expiresAt || new Date(t.expiresAt) > now);
       });
     }
 
@@ -932,7 +941,7 @@ export const dbService = {
     // 1. Get request to check expected parameters
     const request = await this.getRequestById(id);
     if (!request) throw new Error("REQUEST_NOT_FOUND");
-    if (request.status === "FULFILLED") return request; // Idempotent
+    if (request.status === "FULFILLED" || request.status === "FORWARD_PENDING") return request; // Idempotent
     if (request.status !== "PENDING") {
       throw new Error(`REQUEST_CANNOT_BE_SETTLED: Current status is '${request.status}'`);
     }
@@ -967,26 +976,7 @@ export const dbService = {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
 
-    // 4. Auto-forward net payment to requester's personal shielded address
-    const MINING_FEE_ZEC = 0.0001;
-    const netPayoutAmount = Math.max(0, Math.round((request.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
-    let forwardTxid: string | undefined;
-
-    if (netPayoutAmount > 0) {
-      checkPayoutCircuitBreaker();
-      try {
-        const forwardResult = await zallet.sendShieldedPayout(
-          request.recipientShieldedUa,
-          netPayoutAmount,
-          request.memo || "VeilX Payment Request Fulfilled"
-        );
-        forwardTxid = forwardResult.txid || forwardResult.opid;
-      } catch (err: any) {
-        console.warn(`[Request Forwarder] Auto-forwarding payout failed for request ${id}:`, err?.message || err);
-      }
-    }
-
-    // 5. Atomic Update
+    // 4. ATOMIC LOCK: Transition status from PENDING -> SETTLING before making payout
     let isMongo = false;
     try {
       await connectToDatabase();
@@ -997,33 +987,95 @@ export const dbService = {
       }
     }
 
+    let lockedRequest: any;
     if (isMongo) {
-      const updated = await PaymentRequest.findOneAndUpdate(
+      lockedRequest = await PaymentRequest.findOneAndUpdate(
         { _id: id, status: "PENDING" },
-        { $set: { status: "FULFILLED", paidTxid: cleanTxid, forwardTxid, paidAt: new Date() } },
+        { $set: { status: "SETTLING", paidTxid: cleanTxid, paidAt: new Date() } },
         { new: true }
       ).lean();
 
-      if (!updated) {
+      if (!lockedRequest) {
         const existing = await PaymentRequest.findById(id).lean();
-        if (existing?.status === "FULFILLED") return existing;
-        throw new Error("CONCURRENT_SETTLEMENT_CONFLICT");
+        if (existing?.status === "FULFILLED" || existing?.status === "FORWARD_PENDING") return existing;
+        throw new Error("CONCURRENT_SETTLEMENT_CONFLICT: Request is currently being settled by another worker.");
       }
-
-      memoryStore.usedTxids.add(cleanTxid);
-      return updated;
     } else {
       if (IS_PRODUCTION) {
         throw new Error("DATABASE_ERROR: Could not settle payment request in primary database.");
       }
       const inMem = memoryStore.requests.find((r) => r._id === id || r.id === id);
       if (!inMem) throw new Error("REQUEST_NOT_FOUND");
-      inMem.status = "FULFILLED";
+      if (inMem.status !== "PENDING") {
+        if (inMem.status === "FULFILLED" || inMem.status === "FORWARD_PENDING") return inMem;
+        throw new Error("CONCURRENT_SETTLEMENT_CONFLICT");
+      }
+      inMem.status = "SETTLING";
       inMem.paidTxid = cleanTxid;
-      inMem.forwardTxid = forwardTxid;
       inMem.paidAt = new Date();
+      lockedRequest = inMem;
+    }
+
+    // 5. Calculate net payout based on min(nominal, actualReceived) to prevent underpayment deficit (HIGH-01)
+    const MINING_FEE_ZEC = 0.0001;
+    const actualReceived = typeof verification.actualAmountZec === "number"
+      ? Math.min(request.amountZec, verification.actualAmountZec)
+      : request.amountZec;
+    const netPayoutAmount = Math.max(0, Math.round((actualReceived - MINING_FEE_ZEC) * 100000000) / 100000000);
+
+    let finalStatus: "FULFILLED" | "FORWARD_PENDING" = "FULFILLED";
+    let forwardTxid: string | undefined;
+    let forwardOpid: string | undefined;
+    let payoutError: string | undefined;
+
+    if (netPayoutAmount > 0) {
+      checkPayoutCircuitBreaker();
+      try {
+        const forwardResult = await zallet.sendShieldedPayout(
+          request.recipientShieldedUa,
+          netPayoutAmount,
+          request.memo || "VeilX Payment Request Fulfilled"
+        );
+        if (forwardResult.txid && !forwardResult.opid) {
+          forwardTxid = forwardResult.txid;
+          finalStatus = "FULFILLED";
+        } else if (forwardResult.opid) {
+          forwardOpid = forwardResult.opid;
+          finalStatus = "FORWARD_PENDING";
+        } else if (forwardResult.txid) {
+          forwardTxid = forwardResult.txid;
+          finalStatus = "FULFILLED";
+        }
+      } catch (err: any) {
+        console.warn(`[Request Forwarder] Payout forwarding deferred to background queue for request ${id}:`, err?.message || err);
+        finalStatus = "FORWARD_PENDING";
+        payoutError = err?.message || String(err);
+      }
+    }
+
+    // 6. Transition to final status (FULFILLED or FORWARD_PENDING)
+    if (isMongo) {
+      const finalized = await PaymentRequest.findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            status: finalStatus,
+            forwardTxid,
+            forwardOpid,
+            payoutError,
+          },
+        },
+        { new: true }
+      ).lean();
       memoryStore.usedTxids.add(cleanTxid);
-      return inMem;
+      return finalized;
+    } else {
+      lockedRequest.status = finalStatus;
+      lockedRequest.forwardTxid = forwardTxid;
+      lockedRequest.forwardOpid = forwardOpid;
+      lockedRequest.payoutError = payoutError;
+      memoryStore.usedTxids.add(cleanTxid);
+      return lockedRequest;
     }
   },
 
@@ -1122,7 +1174,7 @@ export const dbService = {
     // 1. Get paylink
     const link = await this.getPayLinkBySlug(slug);
     if (!link) throw new Error("PAYLINK_NOT_FOUND");
-    if (link.status === "PAID") return link; // Idempotent
+    if (link.status === "PAID" || link.status === "FORWARD_PENDING") return link; // Idempotent
     if (link.status !== "UNPAID") {
       throw new Error(`PAYLINK_CANNOT_BE_SETTLED: Current status is '${link.status}'`);
     }
@@ -1149,26 +1201,7 @@ export const dbService = {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
 
-    // 4. Auto-forward net funds from Escrow to creator's personal shielded address
-    const MINING_FEE_ZEC = 0.0001;
-    const netPayoutAmount = Math.max(0, Math.round((link.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
-    let forwardTxid: string | undefined;
-
-    if (netPayoutAmount > 0) {
-      checkPayoutCircuitBreaker();
-      try {
-        const forwardResult = await zallet.sendShieldedPayout(
-          link.recipientShieldedUa,
-          netPayoutAmount,
-          `VeilX Invoice: ${link.title || link.slug}`
-        );
-        forwardTxid = forwardResult.txid || forwardResult.opid;
-      } catch (err: any) {
-        console.warn(`[Invoice Forwarder] Auto-forwarding payout failed for paylink ${slug}:`, err?.message || err);
-      }
-    }
-
-    // 5. Atomic Update
+    // 4. ATOMIC LOCK: Transition status from UNPAID -> SETTLING before making payout
     let isMongo = false;
     try {
       await connectToDatabase();
@@ -1179,33 +1212,95 @@ export const dbService = {
       }
     }
 
+    let lockedLink: any;
     if (isMongo) {
-      const updated = await PaymentLink.findOneAndUpdate(
+      lockedLink = await PaymentLink.findOneAndUpdate(
         { slug, status: "UNPAID" },
-        { $set: { status: "PAID", paidTxid: cleanTxid, forwardTxid, paidAt: new Date() } },
+        { $set: { status: "SETTLING", paidTxid: cleanTxid, paidAt: new Date() } },
         { new: true }
       ).lean();
 
-      if (!updated) {
+      if (!lockedLink) {
         const existing = await PaymentLink.findOne({ slug }).lean();
-        if (existing?.status === "PAID") return existing;
-        throw new Error("CONCURRENT_SETTLEMENT_CONFLICT");
+        if (existing?.status === "PAID" || existing?.status === "FORWARD_PENDING") return existing;
+        throw new Error("CONCURRENT_SETTLEMENT_CONFLICT: PayLink is currently being settled by another worker.");
       }
-
-      memoryStore.usedTxids.add(cleanTxid);
-      return updated;
     } else {
       if (IS_PRODUCTION) {
         throw new Error("DATABASE_ERROR: Could not settle PayLink invoice in primary database.");
       }
       const inMem = memoryStore.paylinks.find((l) => l.slug === slug);
       if (!inMem) throw new Error("PAYLINK_NOT_FOUND");
-      inMem.status = "PAID";
+      if (inMem.status !== "UNPAID") {
+        if (inMem.status === "PAID" || inMem.status === "FORWARD_PENDING") return inMem;
+        throw new Error("CONCURRENT_SETTLEMENT_CONFLICT");
+      }
+      inMem.status = "SETTLING";
       inMem.paidTxid = cleanTxid;
-      inMem.forwardTxid = forwardTxid;
       inMem.paidAt = new Date();
+      lockedLink = inMem;
+    }
+
+    // 5. Calculate net funds from Escrow to creator's personal shielded address (deficit-protected)
+    const MINING_FEE_ZEC = 0.0001;
+    const actualReceived = typeof verification.actualAmountZec === "number"
+      ? Math.min(link.amountZec, verification.actualAmountZec)
+      : link.amountZec;
+    const netPayoutAmount = Math.max(0, Math.round((actualReceived - MINING_FEE_ZEC) * 100000000) / 100000000);
+
+    let finalStatus: "PAID" | "FORWARD_PENDING" = "PAID";
+    let forwardTxid: string | undefined;
+    let forwardOpid: string | undefined;
+    let payoutError: string | undefined;
+
+    if (netPayoutAmount > 0) {
+      checkPayoutCircuitBreaker();
+      try {
+        const forwardResult = await zallet.sendShieldedPayout(
+          link.recipientShieldedUa,
+          netPayoutAmount,
+          `VeilX Invoice: ${link.title || link.slug}`
+        );
+        if (forwardResult.txid && !forwardResult.opid) {
+          forwardTxid = forwardResult.txid;
+          finalStatus = "PAID";
+        } else if (forwardResult.opid) {
+          forwardOpid = forwardResult.opid;
+          finalStatus = "FORWARD_PENDING";
+        } else if (forwardResult.txid) {
+          forwardTxid = forwardResult.txid;
+          finalStatus = "PAID";
+        }
+      } catch (err: any) {
+        console.warn(`[Invoice Forwarder] Payout forwarding deferred to background queue for paylink ${slug}:`, err?.message || err);
+        finalStatus = "FORWARD_PENDING";
+        payoutError = err?.message || String(err);
+      }
+    }
+
+    // 6. Transition to final status (PAID or FORWARD_PENDING)
+    if (isMongo) {
+      const finalized = await PaymentLink.findOneAndUpdate(
+        { slug },
+        {
+          $set: {
+            status: finalStatus,
+            forwardTxid,
+            forwardOpid,
+            payoutError,
+          },
+        },
+        { new: true }
+      ).lean();
       memoryStore.usedTxids.add(cleanTxid);
-      return inMem;
+      return finalized;
+    } else {
+      lockedLink.status = finalStatus;
+      lockedLink.forwardTxid = forwardTxid;
+      lockedLink.forwardOpid = forwardOpid;
+      lockedLink.payoutError = payoutError;
+      memoryStore.usedTxids.add(cleanTxid);
+      return lockedLink;
     }
   },
 
@@ -1324,5 +1419,275 @@ export const dbService = {
       return inMem;
     }
     throw new Error("REQUEST_NOT_FOUND");
+  },
+
+  /**
+   * Finalizes an invoice forward after on-chain dispatch/verification
+   */
+  async finalizePayLinkForward(slug: string, forwardTxid: string) {
+    try {
+      await connectToDatabase();
+      const updated = await PaymentLink.findOneAndUpdate(
+        { slug },
+        {
+          $set: {
+            status: "PAID",
+            forwardTxid,
+            forwardOpid: undefined,
+            payoutError: undefined,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true }
+      ).lean();
+      if (updated) return updated;
+    } catch (e) {
+      if (IS_PRODUCTION) throw e;
+    }
+    const inMem = memoryStore.paylinks.find((l) => l.slug === slug);
+    if (inMem) {
+      inMem.status = "PAID";
+      inMem.forwardTxid = forwardTxid;
+      inMem.forwardOpid = undefined;
+      inMem.payoutError = undefined;
+      return inMem;
+    }
+    throw new Error("PAYLINK_NOT_FOUND");
+  },
+
+  /**
+   * Finalizes a payment request forward after on-chain dispatch/verification
+   */
+  async finalizeRequestForward(id: string, forwardTxid: string) {
+    try {
+      await connectToDatabase();
+      const updated = await PaymentRequest.findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            status: "FULFILLED",
+            forwardTxid,
+            forwardOpid: undefined,
+            payoutError: undefined,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true }
+      ).lean();
+      if (updated) return updated;
+    } catch (e) {
+      if (IS_PRODUCTION) throw e;
+    }
+    const inMem = memoryStore.requests.find((r) => r._id === id || r.id === id);
+    if (inMem) {
+      inMem.status = "FULFILLED";
+      inMem.forwardTxid = forwardTxid;
+      inMem.forwardOpid = undefined;
+      inMem.payoutError = undefined;
+      return inMem;
+    }
+    throw new Error("REQUEST_NOT_FOUND");
+  },
+
+  /**
+   * Manual or background retry for PayLink invoice payout forwarding
+   */
+  async retryForwardPayLink(slug: string, requestedByUsername?: string) {
+    const link = await this.getPayLinkBySlug(slug);
+    if (!link) throw new Error("PAYLINK_NOT_FOUND");
+
+    if (requestedByUsername) {
+      const cleanUser = requestedByUsername.replace("@", "").toLowerCase();
+      const cleanCreator = (link.creatorUsernameSnapshot || "").toLowerCase();
+      if (cleanUser !== cleanCreator) {
+        throw new Error("UNAUTHORIZED: Only the invoice creator can trigger payout retries.");
+      }
+    }
+
+    if (link.status === "PAID" && link.forwardTxid) {
+      return { success: true, message: "Invoice payout already settled.", forwardTxid: link.forwardTxid, link };
+    }
+
+    if (link.status !== "FORWARD_PENDING" && link.status !== "SETTLING") {
+      throw new Error(`CANNOT_RETRY_PAYOUT: Invoice status is '${link.status}' (expected 'FORWARD_PENDING').`);
+    }
+
+    // 1. If opid is present, poll it first
+    if (link.forwardOpid) {
+      try {
+        const opStatus = await zallet.pollOperationStatus(link.forwardOpid, 1, 0);
+        if (opStatus.status === "success" && opStatus.txid) {
+          const updated = await this.finalizePayLinkForward(slug, opStatus.txid);
+          return { success: true, status: "PAID", forwardTxid: opStatus.txid, link: updated };
+        }
+      } catch (e) {
+        // Continue to fresh attempt if op failed or expired
+      }
+    }
+
+    // 2. Fresh payout attempt
+    const MINING_FEE_ZEC = 0.0001;
+    const netPayoutAmount = Math.max(0, Math.round((link.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
+    checkPayoutCircuitBreaker();
+
+    try {
+      const forwardResult = await zallet.sendShieldedPayout(
+        link.recipientShieldedUa,
+        netPayoutAmount,
+        `VeilX Invoice: ${link.title || link.slug}`
+      );
+      if (forwardResult.txid && !forwardResult.opid) {
+        const updated = await this.finalizePayLinkForward(slug, forwardResult.txid);
+        return { success: true, status: "PAID", forwardTxid: forwardResult.txid, link: updated };
+      } else if (forwardResult.opid) {
+        await connectToDatabase().catch(() => {});
+        await PaymentLink.findOneAndUpdate(
+          { slug },
+          { $set: { status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, payoutError: undefined } }
+        ).catch(() => {});
+        return { success: true, status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, link };
+      } else if (forwardResult.txid) {
+        const updated = await this.finalizePayLinkForward(slug, forwardResult.txid);
+        return { success: true, status: "PAID", forwardTxid: forwardResult.txid, link: updated };
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      await connectToDatabase().catch(() => {});
+      await PaymentLink.findOneAndUpdate(
+        { slug },
+        { $set: { status: "FORWARD_PENDING", payoutError: errMsg, updatedAt: new Date() } }
+      ).catch(() => {});
+      throw new Error(`PAYOUT_RETRY_FAILED: ${errMsg}`);
+    }
+  },
+
+  /**
+   * Manual or background retry for direct payment request payout forwarding
+   */
+  async retryForwardRequest(id: string, requestedByUsername?: string) {
+    const request = await this.getRequestById(id);
+    if (!request) throw new Error("REQUEST_NOT_FOUND");
+
+    if (requestedByUsername) {
+      const cleanUser = requestedByUsername.replace("@", "").toLowerCase();
+      const cleanRequester = (request.requesterUsernameSnapshot || "").toLowerCase();
+      if (cleanUser !== cleanRequester) {
+        throw new Error("UNAUTHORIZED: Only the request creator can trigger payout retries.");
+      }
+    }
+
+    if (request.status === "FULFILLED" && request.forwardTxid) {
+      return { success: true, message: "Payment request payout already settled.", forwardTxid: request.forwardTxid, request };
+    }
+
+    if (request.status !== "FORWARD_PENDING" && request.status !== "SETTLING") {
+      throw new Error(`CANNOT_RETRY_PAYOUT: Request status is '${request.status}' (expected 'FORWARD_PENDING').`);
+    }
+
+    // 1. If opid is present, poll it first
+    if (request.forwardOpid) {
+      try {
+        const opStatus = await zallet.pollOperationStatus(request.forwardOpid, 1, 0);
+        if (opStatus.status === "success" && opStatus.txid) {
+          const updated = await this.finalizeRequestForward(id, opStatus.txid);
+          return { success: true, status: "FULFILLED", forwardTxid: opStatus.txid, request: updated };
+        }
+      } catch (e) {
+        // Continue to fresh attempt
+      }
+    }
+
+    // 2. Fresh payout attempt
+    const MINING_FEE_ZEC = 0.0001;
+    const netPayoutAmount = Math.max(0, Math.round((request.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
+    checkPayoutCircuitBreaker();
+
+    try {
+      const forwardResult = await zallet.sendShieldedPayout(
+        request.recipientShieldedUa,
+        netPayoutAmount,
+        request.memo || "VeilX Payment Request Fulfilled"
+      );
+      if (forwardResult.txid && !forwardResult.opid) {
+        const updated = await this.finalizeRequestForward(id, forwardResult.txid);
+        return { success: true, status: "FULFILLED", forwardTxid: forwardResult.txid, request: updated };
+      } else if (forwardResult.opid) {
+        await connectToDatabase().catch(() => {});
+        await PaymentRequest.findByIdAndUpdate(
+          id,
+          { $set: { status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, payoutError: undefined } }
+        ).catch(() => {});
+        return { success: true, status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, request };
+      } else if (forwardResult.txid) {
+        const updated = await this.finalizeRequestForward(id, forwardResult.txid);
+        return { success: true, status: "FULFILLED", forwardTxid: forwardResult.txid, request: updated };
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      await connectToDatabase().catch(() => {});
+      await PaymentRequest.findByIdAndUpdate(
+        id,
+        { $set: { status: "FORWARD_PENDING", payoutError: errMsg, updatedAt: new Date() } }
+      ).catch(() => {});
+      throw new Error(`PAYOUT_RETRY_FAILED: ${errMsg}`);
+    }
+  },
+
+  /**
+   * Reconciles all pending invoice and request payouts across the system (Robot queue)
+   */
+  async reconcilePendingForwards() {
+    let pendingLinks: any[] = [];
+    let pendingRequests: any[] = [];
+    let isMongo = false;
+
+    try {
+      await connectToDatabase();
+      isMongo = true;
+      const [links, reqs] = await Promise.all([
+        PaymentLink.find({ status: { $in: ["FORWARD_PENDING", "SETTLING"] } }).limit(50).lean(),
+        PaymentRequest.find({ status: { $in: ["FORWARD_PENDING", "SETTLING"] } }).limit(50).lean(),
+      ]);
+      pendingLinks = links || [];
+      pendingRequests = reqs || [];
+    } catch (e) {
+      if (IS_PRODUCTION) {
+        throw new Error("DATABASE_UNAVAILABLE: Cannot query pending forwards for reconciliation.");
+      }
+    }
+
+    if (!isMongo) {
+      pendingLinks = memoryStore.paylinks.filter(
+        (l) => l.status === "FORWARD_PENDING" || l.status === "SETTLING"
+      );
+      pendingRequests = memoryStore.requests.filter(
+        (r) => r.status === "FORWARD_PENDING" || r.status === "SETTLING"
+      );
+    }
+
+    const results: any[] = [];
+
+    // Process PayLinks
+    for (const link of pendingLinks) {
+      try {
+        const res = await this.retryForwardPayLink(link.slug);
+        results.push({ type: "paylink", slug: link.slug, ...res });
+      } catch (err: any) {
+        results.push({ type: "paylink", slug: link.slug, status: "FORWARD_PENDING", error: err.message });
+      }
+    }
+
+    // Process Requests
+    for (const req of pendingRequests) {
+      const id = (req._id || req.id).toString();
+      try {
+        const res = await this.retryForwardRequest(id);
+        results.push({ type: "request", id, ...res });
+      } catch (err: any) {
+        results.push({ type: "request", id, status: "FORWARD_PENDING", error: err.message });
+      }
+    }
+
+    return results;
   },
 };

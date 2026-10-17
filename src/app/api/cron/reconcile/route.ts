@@ -51,18 +51,21 @@ async function handleReconcile(req: NextRequest) {
       );
     }
 
-    // Run both pending tip settlement reconciliation and 30-day tip expiration sweeps
-    const [reconciledResults, expiredResults] = await Promise.all([
+    // Run pending tip claims, pending invoice/request forwards, and 30-day tip expiration sweeps
+    const [reconciledTips, reconciledForwards, expiredResults] = await Promise.all([
       dbService.reconcilePendingTips(),
+      dbService.reconcilePendingForwards(),
       dbService.expireOldTips(),
     ]);
 
     return NextResponse.json({
       success: true,
       timestamp: new Date().toISOString(),
-      reconciledCount: reconciledResults.length,
+      reconciledTipsCount: reconciledTips.length,
+      reconciledForwardsCount: reconciledForwards.length,
       expiredCount: expiredResults.expiredCount || 0,
-      reconciledResults,
+      reconciledTips,
+      reconciledForwards,
       expiredResults,
     });
   } catch (error: any) {

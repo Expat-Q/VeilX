@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
-export type InvoiceStatus = "UNPAID" | "PAID" | "EXPIRED";
+export type InvoiceStatus = "UNPAID" | "SETTLING" | "PAID" | "FORWARD_PENDING" | "EXPIRED";
 
 export interface IPaymentLink extends Document {
   creatorUserId: mongoose.Types.ObjectId;
@@ -15,6 +15,8 @@ export interface IPaymentLink extends Document {
   paidAt?: Date;
   paidTxid?: string;
   forwardTxid?: string;
+  forwardOpid?: string;
+  payoutError?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,11 +33,13 @@ const PaymentLinkSchema = new Schema<IPaymentLink>(
     diversifierIndex: { type: String },
     status: {
       type: String,
-      enum: ["UNPAID", "PAID", "EXPIRED"],
+      enum: ["UNPAID", "SETTLING", "PAID", "FORWARD_PENDING", "EXPIRED"],
       default: "UNPAID",
       index: true,
     },
     paidAt: { type: Date },
+    forwardOpid: { type: String, index: true },
+    payoutError: { type: String },
     paidTxid: {
       type: String,
       unique: true,
