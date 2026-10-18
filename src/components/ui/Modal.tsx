@@ -47,23 +47,21 @@ export function Modal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-brown-950/60 backdrop-blur-sm transition-opacity duration-200"
         onClick={onClose}
       />
 
-      {/* Modal / Bottom Sheet Card */}
+      {/* Modal Card */}
       <div
         className={cn(
-          "relative w-full bg-white border-t sm:border border-butter-300 rounded-t-[32px] sm:rounded-[32px] shadow-modal p-5 sm:p-7 z-10 text-left transform transition-all duration-300 animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:zoom-in-95 max-h-[92vh] overflow-y-auto",
+          "relative w-full bg-white border border-butter-300 rounded-[28px] sm:rounded-[32px] shadow-modal p-5 sm:p-7 z-10 text-left transform transition-all duration-300 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto my-auto",
           maxWidthClasses[maxWidth],
           className
         )}
       >
-        {/* Mobile Drag Handle Indicator */}
-        <div className="sm:hidden w-12 h-1 bg-butter-300 rounded-full mx-auto mb-4" />
 
         {/* Header */}
         <div className="flex items-start justify-between gap-4 mb-5">

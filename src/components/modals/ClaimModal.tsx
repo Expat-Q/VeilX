@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   ShieldCheck,
   ArrowRight,
@@ -12,11 +12,12 @@ import {
   ExternalLink,
   AlertCircle,
   Clock,
+  Clipboard,
 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { connectBrowserWallet } from "@/lib/wallet";
+import { connectBrowserWallet, isMobileDevice } from "@/lib/wallet";
 import { truncateAddress, getZcashExplorerUrl } from "@/lib/utils";
 import { useZecPrice } from "@/lib/price-service";
 import { validateZcashAddressFull } from "@/lib/zcash-address";
@@ -47,12 +48,17 @@ export function ClaimModal({
   const [recipientAddress, setRecipientAddress] = useState("");
   const [isClaiming, setIsClaiming] = useState(false);
   const [isAutoFilling, setIsAutoFilling] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [isClaimed, setIsClaimed] = useState(false);
   const [isPendingVerification, setIsPendingVerification] = useState(false);
   const [payoutOpid, setPayoutOpid] = useState<string | null>(null);
   const [claimTxid, setClaimTxid] = useState<string | null>(null);
   const [copiedTxid, setCopiedTxid] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsMobile(isMobileDevice());
+  }, []);
 
   const { formatZecToUsd } = useZecPrice();
 
@@ -70,8 +76,29 @@ export function ClaimModal({
     : null;
 
   const handleAutoFillWallet = async () => {
-    setIsAutoFilling(true);
     setErrorNotice(null);
+
+    // Mobile UX: 1-tap paste from clipboard rather than failing extension injection
+    if (isMobile) {
+      try {
+        if (!navigator.clipboard?.readText) {
+          setErrorNotice("Clipboard access unavailable. Please paste your address manually.");
+          return;
+        }
+        const text = await navigator.clipboard.readText();
+        const cleaned = text.trim();
+        if (!cleaned) {
+          setErrorNotice("Clipboard is empty. Copy your address from your wallet (Zashi, YWallet) first.");
+          return;
+        }
+        setRecipientAddress(cleaned);
+      } catch (err: any) {
+        setErrorNotice("Clipboard permission denied. Please paste your address into the field.");
+      }
+      return;
+    }
+
+    setIsAutoFilling(true);
     try {
       const res = await connectBrowserWallet();
       if (res.address && res.address !== "shielded_connected") {
@@ -288,10 +315,19 @@ export function ClaimModal({
                   type="button"
                   onClick={handleAutoFillWallet}
                   disabled={isAutoFilling}
-                  className="text-xs font-bold text-brown-800 hover:text-brown-950 flex items-center gap-1 transition-colors"
+                  className="text-xs font-bold text-brown-800 hover:text-brown-950 flex items-center gap-1.5 transition-colors"
                 >
-                  <Wallet className="w-3.5 h-3.5" />
-                  <span>{isAutoFilling ? "Detecting..." : "Autofill Wallet"}</span>
+                  {isMobile ? (
+                    <>
+                      <Clipboard className="w-3.5 h-3.5" />
+                      <span>Paste from Clipboard</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wallet className="w-3.5 h-3.5" />
+                      <span>{isAutoFilling ? "Detecting..." : "Autofill Wallet"}</span>
+                    </>
+                  )}
                 </button>
               </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Link2,
   Copy,
@@ -11,12 +11,13 @@ import {
   AlertCircle,
   CheckCircle2,
   ArrowRight,
+  Clipboard,
 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { AmountInput } from "@/components/ui/AmountInput";
-import { connectBrowserWallet } from "@/lib/wallet";
+import { connectBrowserWallet, isMobileDevice } from "@/lib/wallet";
 import { validateZcashAddressFull } from "@/lib/zcash-address";
 import { NetworkMismatchAlert } from "@/components/ui/NetworkMismatchAlert";
 import { useZecPrice } from "@/lib/price-service";
@@ -31,17 +32,43 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
   const [amountZec, setAmountZec] = useState("1.0");
   const [shieldedUa, setShieldedUa] = useState("");
   const [isAutoFilling, setIsAutoFilling] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [createdPayLink, setCreatedPayLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
+  useEffect(() => {
+    setIsMobile(isMobileDevice());
+  }, []);
+
   const { formatZecToUsd } = useZecPrice();
   const addressValidation = shieldedUa.trim() ? validateZcashAddressFull(shieldedUa.trim(), "mainnet") : null;
 
   const handleAutoFillWallet = async () => {
-    setIsAutoFilling(true);
     setErrorNotice(null);
+
+    // Mobile UX: 1-tap paste from clipboard rather than failing extension injection
+    if (isMobile) {
+      try {
+        if (!navigator.clipboard?.readText) {
+          setErrorNotice("Clipboard access unavailable. Please paste your address manually.");
+          return;
+        }
+        const text = await navigator.clipboard.readText();
+        const cleaned = text.trim();
+        if (!cleaned) {
+          setErrorNotice("Clipboard is empty. Copy your address from your wallet (Zashi, YWallet) first.");
+          return;
+        }
+        setShieldedUa(cleaned);
+      } catch (err: any) {
+        setErrorNotice("Clipboard permission denied. Please paste your address into the field.");
+      }
+      return;
+    }
+
+    setIsAutoFilling(true);
     try {
       const res = await connectBrowserWallet();
       if (res.address && res.address !== "shielded_connected") {
@@ -148,10 +175,19 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
                 type="button"
                 onClick={handleAutoFillWallet}
                 disabled={isAutoFilling}
-                className="text-xs font-bold text-brown-800 hover:text-brown-950 flex items-center gap-1 transition-colors"
+                className="text-xs font-bold text-brown-800 hover:text-brown-950 flex items-center gap-1.5 transition-colors"
               >
-                <Wallet className="w-3.5 h-3.5" />
-                <span>{isAutoFilling ? "Detecting..." : "Autofill Wallet"}</span>
+                {isMobile ? (
+                  <>
+                    <Clipboard className="w-3.5 h-3.5" />
+                    <span>Paste from Clipboard</span>
+                  </>
+                ) : (
+                  <>
+                    <Wallet className="w-3.5 h-3.5" />
+                    <span>{isAutoFilling ? "Detecting..." : "Autofill Wallet"}</span>
+                  </>
+                )}
               </button>
             </div>
             <Input

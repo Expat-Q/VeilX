@@ -16,6 +16,7 @@ import {
   X,
   CheckCircle2,
   Clock,
+  Clipboard,
 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
@@ -23,7 +24,7 @@ import { Input } from "@/components/ui/Input";
 import { AmountInput } from "@/components/ui/AmountInput";
 import { XProfileCard } from "@/components/ui/XProfileCard";
 import { XLogo } from "@/components/ui/XLogo";
-import { connectBrowserWallet } from "@/lib/wallet";
+import { connectBrowserWallet, isMobileDevice } from "@/lib/wallet";
 import { validateZcashAddressFull } from "@/lib/zcash-address";
 import { NetworkMismatchAlert } from "@/components/ui/NetworkMismatchAlert";
 import { useZecPrice } from "@/lib/price-service";
@@ -63,7 +64,12 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
   const [reason, setReason] = useState("");
   const [shieldedUa, setShieldedUa] = useState("");
   const [isAutoFilling, setIsAutoFilling] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsMobile(isMobileDevice());
+  }, []);
 
   const { formatZecToUsd } = useZecPrice();
   const addressValidation = shieldedUa.trim() ? validateZcashAddressFull(shieldedUa.trim(), "mainnet") : null;
@@ -211,8 +217,29 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
   };
 
   const handleAutoFillWallet = async () => {
-    setIsAutoFilling(true);
     setErrorNotice(null);
+
+    // Mobile UX: 1-tap paste from clipboard rather than failing extension injection
+    if (isMobile) {
+      try {
+        if (!navigator.clipboard?.readText) {
+          setErrorNotice("Clipboard access unavailable. Please paste your address manually.");
+          return;
+        }
+        const text = await navigator.clipboard.readText();
+        const cleaned = text.trim();
+        if (!cleaned) {
+          setErrorNotice("Clipboard is empty. Copy your address from your wallet (Zashi, YWallet) first.");
+          return;
+        }
+        setShieldedUa(cleaned);
+      } catch (err: any) {
+        setErrorNotice("Clipboard permission denied. Please paste your address into the field.");
+      }
+      return;
+    }
+
+    setIsAutoFilling(true);
     try {
       const res = await connectBrowserWallet();
       if (res.address && res.address !== "shielded_connected") {
@@ -556,7 +583,12 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
                 disabled={isAutoFilling}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-brown-900 hover:bg-brown-950 text-white rounded-lg text-xs font-bold shadow-subtle transition-all active:scale-95 disabled:opacity-60"
               >
-                {isAutoFilling ? (
+                {isMobile ? (
+                  <>
+                    <Clipboard className="w-3.5 h-3.5 text-butter-200" />
+                    <span>Paste Address</span>
+                  </>
+                ) : isAutoFilling ? (
                   <>
                     <Loader2 className="w-3 h-3 animate-spin" />
                     <span>Detecting Wallet...</span>

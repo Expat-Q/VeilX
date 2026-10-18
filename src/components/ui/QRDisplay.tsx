@@ -14,6 +14,7 @@ import {
   Download,
   ExternalLink,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "./Button";
 import { truncateAddress } from "@/lib/utils";
@@ -178,7 +179,7 @@ export function QRDisplay({
           ) : (
             <Wallet className="w-3.5 h-3.5" />
           )}
-          <span>{walletInfo.isMobile ? "Pay with ZODL" : "Pay with Browser Wallet"}</span>
+          <span>{walletInfo.isMobile ? "Mobile Wallet" : "Browser Wallet"}</span>
         </button>
 
         <button
@@ -206,22 +207,22 @@ export function QRDisplay({
         </div>
       )}
 
-      {/* MODE 1: 1-Click Wallet (Noir Extension on Desktop or ZODL Mobile App) */}
+      {/* MODE 1: 1-Click Wallet (Noir Extension on Desktop or Mobile Wallet Deep Link) */}
       {paymentMode === "wallet" && (
         <div className="w-full space-y-3.5">
           {!txSuccess ? (
             <div className="p-5 bg-white border border-butter-300 rounded-3xl space-y-4 text-left shadow-subtle">
-              {/* Mobile View: ZODL Deep Link Button */}
+              {/* Mobile View: Zcash Mobile Deep Link */}
               {walletInfo.isMobile ? (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3 p-3 bg-butter-50 border border-butter-200 rounded-2xl">
-                    <div className="w-10 h-10 rounded-xl bg-brown-900 text-white flex items-center justify-center font-bold text-sm shadow-subtle">
-                      Z
+                <div className="space-y-3.5">
+                  <div className="flex items-start gap-3 p-3.5 bg-butter-50 border border-butter-200 rounded-2xl">
+                    <div className="w-10 h-10 rounded-xl bg-brown-900 text-white flex items-center justify-center font-bold text-sm shadow-subtle shrink-0 mt-0.5">
+                      🛡️
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-brown-950">Zcash Mobile App</p>
-                      <p className="text-[11px] text-brown-500">
-                        Launches your installed wallet with pre-filled shielded payment
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold text-brown-950">Zcash Mobile Wallet</p>
+                      <p className="text-[11px] text-brown-600 leading-relaxed">
+                        Tapping below will open your mobile wallet (Zashi, YWallet, Noir) with recipient address, amount, and memo pre-filled.
                       </p>
                     </div>
                   </div>
@@ -231,9 +232,19 @@ export function QRDisplay({
                     className="w-full h-12 inline-flex items-center justify-center gap-2 bg-brown-900 text-white hover:bg-brown-950 rounded-2xl text-sm font-bold transition-all shadow-elevated active:scale-95"
                   >
                     <Smartphone className="w-4 h-4 text-butter-200" />
-                    <span>Open in Mobile Wallet</span>
+                    <span>Open & Pay in Mobile Wallet</span>
                     <ArrowRight className="w-4 h-4 text-butter-200 ml-auto" />
                   </a>
+
+                  <div className="p-3 bg-butter-100/60 border border-butter-200/80 rounded-xl text-left space-y-1.5">
+                    <p className="text-[11px] text-brown-800 leading-snug flex items-start gap-1.5 font-medium">
+                      <Sparkles className="w-3.5 h-3.5 text-brown-900 shrink-0 mt-0.5" />
+                      <span><strong>Direct to Send:</strong> Zcash mobile wallets open straight to the review/send payment screen. No separate &ldquo;connect wallet&rdquo; prompt is required.</span>
+                    </p>
+                    <p className="text-[11px] text-brown-500 leading-snug pl-5">
+                      If your wallet doesn&apos;t open automatically, use the <strong>Scan QR Code</strong> tab or copy the escrow address below.
+                    </p>
+                  </div>
                 </div>
               ) : (
                 /* Desktop View: Browser Extension Signing */
