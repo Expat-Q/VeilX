@@ -12,6 +12,7 @@ import { RequestModal } from "@/components/modals/RequestModal";
 import { PayLinkModal } from "@/components/modals/PayLinkModal";
 import { ClaimModal } from "@/components/modals/ClaimModal";
 import { LoginModal } from "@/components/auth/LoginModal";
+import { ConnectedSuccessModal } from "@/components/modals/ConnectedSuccessModal";
 import { Button } from "@/components/ui/Button";
 import { XLogo } from "@/components/ui/XLogo";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
@@ -36,6 +37,7 @@ export default function DashboardPage() {
   const [isPayLinkOpen, setIsPayLinkOpen] = useState(false);
   const [selectedClaimTip, setSelectedClaimTip] = useState<any | null>(null);
   const [batchClaimTips, setBatchClaimTips] = useState<any[] | null>(null);
+  const [isConnectedSuccessOpen, setIsConnectedSuccessOpen] = useState(false);
 
   // Mobile navigation tab
   const [mobileTab, setMobileTab] = useState<"home" | "tips" | "requests" | "links" | "profile">("home");
@@ -43,6 +45,17 @@ export default function DashboardPage() {
 
   // Check current session
   useEffect(() => {
+    // Check if user just returned from successful X OAuth connection
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("connected") === "true" || params.get("connected") === "1") {
+        setIsConnectedSuccessOpen(true);
+        const url = new URL(window.location.href);
+        url.searchParams.delete("connected");
+        window.history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+      }
+    }
+
     fetch("/api/auth/me")
       .then((res) => res.json())
       .then((data) => {
@@ -193,6 +206,13 @@ export default function DashboardPage() {
           // Keep modal open to show transaction hash and operation ID; reset occurs when user clicks Done
           setRefreshKey((k) => k + 1);
         }}
+      />
+
+      {/* 𝕏 Account Binding Confirmation Modal */}
+      <ConnectedSuccessModal
+        isOpen={isConnectedSuccessOpen}
+        onClose={() => setIsConnectedSuccessOpen(false)}
+        user={user}
       />
     </div>
   );

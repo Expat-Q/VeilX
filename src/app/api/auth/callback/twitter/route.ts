@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
     cookieStore.delete("oauth_code_verifier");
     cookieStore.delete("oauth_state");
 
-    return NextResponse.redirect(new URL("/", req.url));
+    return NextResponse.redirect(new URL("/?connected=true", req.url));
   } catch (error) {
     console.error("Twitter OAuth Callback Error:", error);
     return NextResponse.redirect(new URL("/?error=oauth_failed", req.url));

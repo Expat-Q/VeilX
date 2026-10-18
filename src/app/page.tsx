@@ -16,6 +16,7 @@ import { RequestModal } from "@/components/modals/RequestModal";
 import { PayLinkModal } from "@/components/modals/PayLinkModal";
 import { ClaimModal } from "@/components/modals/ClaimModal";
 import { LoginModal } from "@/components/auth/LoginModal";
+import { ConnectedSuccessModal } from "@/components/modals/ConnectedSuccessModal";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 
 export default function Home() {
@@ -35,15 +36,26 @@ export default function Home() {
   const [isPayLinkOpen, setIsPayLinkOpen] = useState(false);
   const [selectedClaimTip, setSelectedClaimTip] = useState<any | null>(null);
   const [batchClaimTips, setBatchClaimTips] = useState<any[] | null>(null);
-
-
+  const [isConnectedSuccessOpen, setIsConnectedSuccessOpen] = useState(false);
 
   // Mobile active tab state
   const [mobileTab, setMobileTab] = useState<"home" | "tips" | "requests" | "links" | "profile">("home");
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Check current session on mount
+  // Check current session on mount and detect OAuth connection success
   useEffect(() => {
+    // Check if user just returned from successful X OAuth connection
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("connected") === "true" || params.get("connected") === "1") {
+        setIsConnectedSuccessOpen(true);
+        // Clean URL cleanly without triggering page refresh
+        const url = new URL(window.location.href);
+        url.searchParams.delete("connected");
+        window.history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+      }
+    }
+
     fetch("/api/auth/me")
       .then((res) => res.json())
       .then((data) => {
@@ -191,6 +203,13 @@ export default function Home() {
           // Keep modal open to show transaction hash and operation ID; reset occurs when user clicks Done
           setRefreshKey((k) => k + 1);
         }}
+      />
+
+      {/* 𝕏 Account Binding Confirmation Modal */}
+      <ConnectedSuccessModal
+        isOpen={isConnectedSuccessOpen}
+        onClose={() => setIsConnectedSuccessOpen(false)}
+        user={user}
       />
     </div>
   );
