@@ -437,7 +437,8 @@ export class ZalletClient {
       rseed: string;
       recipientRawAddress: string;
       blockHeight?: number;
-    }
+    },
+    fundingTxid?: string
   ): Promise<{ opid?: string; txid?: string; isAsync: boolean }> {
     checkPayoutCircuitBreaker();
 
@@ -556,13 +557,46 @@ export class ZalletClient {
         }
 
         // B. Shielded Escrow Vault Disbursement
-        if (escrowSpendingKey && escrowNote) {
+        let noteToSpend = escrowNote;
+        if (!noteToSpend && fundingTxid && ufvkWatcher) {
+          try {
+            const rawTx = await this.call<any>("getrawtransaction", [fundingTxid, 1]);
+            const blockHeight = rawTx?.height;
+            const actions = rawTx?.orchard?.actions || [];
+            for (const act of actions) {
+              const compactAct = {
+                nullifier_hex: act.nullifier || act.nullifier_hex || "",
+                cmx_hex: act.cmx || act.cmx_hex || "",
+                epk_hex: act.ephemeralKey || act.epk || act.epk_hex || "",
+                enc_ciphertext_hex: act.encCiphertext || act.enc_ciphertext || act.enc_ciphertext_hex || "",
+              };
+              if (compactAct.cmx_hex && compactAct.epk_hex && compactAct.enc_ciphertext_hex) {
+                const dec = await ufvkWatcher.trialDecryptAction(compactAct);
+                if (dec && dec.value_zatoshis >= amountZats) {
+                  noteToSpend = {
+                    cmx: compactAct.cmx_hex,
+                    valueZat: BigInt(dec.value_zatoshis),
+                    rho: dec.rho_hex,
+                    rseed: dec.rseed_hex,
+                    recipientRawAddress: dec.recipient_address_hex,
+                    blockHeight,
+                  };
+                  break;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("[sendShieldedPayout] Auto-discovery of note from fundingTxid failed:", e);
+          }
+        }
+
+        if (escrowSpendingKey && noteToSpend) {
           const blockchainInfo = await this.getBlockchainInfo().catch(() => ({ blocks: 3523120 }));
           const currentHeight = blockchainInfo.blocks;
           const expiryHeight = currentHeight + 20;
 
           // Sync tree state before note's block
-          const noteHeight = escrowNote.blockHeight || (currentHeight - 1);
+          const noteHeight = noteToSpend.blockHeight || (currentHeight - 1);
           const prevHeight = noteHeight - 1;
           const tsData = await this.call<any>("z_gettreestate", [String(prevHeight)]);
           const stateHex = tsData?.ironwood?.commitments?.finalState || tsData?.orchard?.commitments?.finalState;
@@ -594,8 +628,8 @@ export class ZalletClient {
               checkpoints: [],
             });
 
-            wasm.tree_append_commitments([escrowNote.cmx]);
-            wasm.tree_track_note(escrowNote.cmx);
+            wasm.tree_append_commitments([noteToSpend.cmx]);
+            wasm.tree_track_note(noteToSpend.cmx);
 
             const blockAnchor = wasm.tree_get_anchor();
 
@@ -603,11 +637,11 @@ export class ZalletClient {
               spends: [
                 {
                   spending_key_hex: escrowSpendingKey,
-                  recipient_raw_address_hex: escrowNote.recipientRawAddress,
-                  value_zatoshis: escrowNote.valueZat,
-                  rho_hex: escrowNote.rho,
-                  rseed_hex: escrowNote.rseed,
-                  cmx_hex: escrowNote.cmx,
+                  recipient_raw_address_hex: noteToSpend.recipientRawAddress,
+                  value_zatoshis: noteToSpend.valueZat,
+                  rho_hex: noteToSpend.rho,
+                  rseed_hex: noteToSpend.rseed,
+                  cmx_hex: noteToSpend.cmx,
                   auth_path_hex: null,
                   position: null,
                 },
@@ -647,7 +681,7 @@ export class ZalletClient {
           }
         }
 
-        if (escrowSpendingKey && !escrowNote) {
+        if (escrowSpendingKey && !noteToSpend) {
           throw new Error(
             "SHIELDED_ESCROW_CONFIRMING: Escrow funds are held in the shielded vault. Awaiting note commitment witness synchronization before autonomous disbursement."
           );

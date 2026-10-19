@@ -1047,7 +1047,9 @@ export const dbService = {
         const forwardResult = await zallet.sendShieldedPayout(
           request.recipientShieldedUa,
           netPayoutAmount,
-          request.memo || "VeilX Payment Request Fulfilled"
+          request.memo || "VeilX Payment Request Fulfilled",
+          undefined,
+          cleanTxid
         );
         if (forwardResult.txid && !forwardResult.opid) {
           forwardTxid = forwardResult.txid;
@@ -1656,7 +1658,9 @@ export const dbService = {
       const forwardResult = await zallet.sendShieldedPayout(
         request.recipientShieldedUa,
         netPayoutAmount,
-        request.memo || "VeilX Payment Request Fulfilled"
+        request.memo || "VeilX Payment Request Fulfilled",
+        undefined,
+        request.paidTxid
       );
       if (forwardResult.txid && !forwardResult.opid) {
         const updated = await this.finalizeRequestForward(id, forwardResult.txid);
