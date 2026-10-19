@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
+import { ufvkWatcher } from "@/lib/escrow/ufvk-watcher";
 
 export async function GET(
   req: NextRequest,
@@ -11,7 +12,26 @@ export async function GET(
       return NextResponse.json({ error: "Tip not found" }, { status: 404 });
     }
 
-    // Lazy auto-reconciliation: if tip is in FUNDING_DETECTED and has fundingTxid, check if block confirmed
+    // 1. Autonomous Mobile Detection: If tip is PENDING, check if UFVK watcher detected incoming note
+    if (tip.status === "PENDING" && tip.escrowAddress) {
+      try {
+        const detected = ufvkWatcher.findNoteByAddressOrMemo({
+          expectedAmountZec: tip.amountZec,
+          depositAddress: tip.escrowAddress,
+        });
+        if (detected?.txid) {
+          const updated = await dbService.confirmTipFunding(
+            (tip._id || tip.id).toString(),
+            detected.txid
+          );
+          if (updated) tip = updated;
+        }
+      } catch {
+        // Continue to regular flow
+      }
+    }
+
+    // 2. Lazy auto-reconciliation: if tip is in FUNDING_DETECTED and has fundingTxid, check if block confirmed
     if (tip.status === "FUNDING_DETECTED" && tip.fundingTxid) {
       try {
         const updated = await dbService.confirmTipFunding(

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
 import { getCurrentUser } from "@/lib/auth";
+import { ufvkWatcher } from "@/lib/escrow/ufvk-watcher";
 
 export async function GET(
   req: NextRequest,
@@ -15,7 +16,28 @@ export async function GET(
       );
     }
 
-    // Lazy auto-reconciliation: if paylink is in SETTLING with paidTxid, check if block confirmed
+    // 1. Autonomous Mobile Detection: If paylink is UNPAID, check if UFVK watcher detected incoming note
+    if (paylink.status === "UNPAID" && paylink.escrowDepositAddress) {
+      try {
+        const detected = ufvkWatcher.findNoteByAddressOrMemo({
+          expectedAmountZec: paylink.amountZec,
+          expectedMemo: paylink.title,
+          depositAddress: paylink.escrowDepositAddress,
+        });
+        if (detected?.txid) {
+          const settled = await dbService.settlePayLink({
+            slug: paylink.slug,
+            paidTxid: detected.txid,
+            payerUsername: paylink.creatorUsernameSnapshot,
+          });
+          if (settled) paylink = settled;
+        }
+      } catch {
+        // Continue to regular flow
+      }
+    }
+
+    // 2. Lazy auto-reconciliation: if paylink is in SETTLING with paidTxid, check if block confirmed
     if (paylink.status === "SETTLING" && paylink.paidTxid) {
       try {
         const settled = await dbService.settlePayLink({

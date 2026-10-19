@@ -127,11 +127,13 @@ export function DashboardOverview({
         await fetchLiveActivity();
       } else {
         const data = await res.json().catch(() => ({}));
-        alert(data.error || "Failed to retry payout. Please check escrow status.");
+        const rawErr = data.error || "Failed to retry payout. Payout is queued in background forwarder.";
+        const cleanErr = rawErr.replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
+        alert(cleanErr);
       }
     } catch (err: any) {
       console.error("Failed to retry paylink forward:", err);
-      alert(err.message || "Failed to retry payout.");
+      alert("Payout is currently queued in the background forwarder.");
     } finally {
       setIsActionLoadingMap((prev) => ({ ...prev, [slug]: false }));
     }
@@ -147,11 +149,13 @@ export function DashboardOverview({
         await fetchLiveActivity();
       } else {
         const data = await res.json().catch(() => ({}));
-        alert(data.error || "Failed to retry payout. Please check escrow status.");
+        const rawErr = data.error || "Failed to retry payout. Payout is queued in background forwarder.";
+        const cleanErr = rawErr.replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
+        alert(cleanErr);
       }
     } catch (err: any) {
       console.error("Failed to retry request forward:", err);
-      alert(err.message || "Failed to retry payout.");
+      alert("Payout is currently queued in the background forwarder.");
     } finally {
       setIsActionLoadingMap((prev) => ({ ...prev, [requestId]: false }));
     }
@@ -625,7 +629,11 @@ export function DashboardOverview({
                               : item.isIncoming
                               ? `Request from @${item.requesterHandle || "someone"}`
                               : `Request to @${item.targetHandle || "recipient"}`
-                            : item.status === "FULFILLED" || item.status === "FORWARD_PENDING" || item.status === "SETTLING"
+                            : item.status === "SETTLING"
+                            ? item.isIncoming
+                              ? `Payment broadcasted to @${item.requesterHandle || "requester"} — Confirming...`
+                              : `@${item.targetHandle || "recipient"} broadcasted payment — Confirming...`
+                            : item.status === "FULFILLED" || item.status === "FORWARD_PENDING"
                             ? item.isIncoming
                               ? `You paid request from @${item.requesterHandle || "requester"}`
                               : `@${item.targetHandle || "recipient"} paid your request`

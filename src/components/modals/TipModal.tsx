@@ -1394,57 +1394,138 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
             /* PATH B: Native Zcash Shielded Payment */
             generatedEscrowAddress && (
               <div className="space-y-4">
-                {fundingNotice && (
-                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl flex items-center gap-2.5 text-xs text-amber-900 font-semibold animate-in fade-in">
-                    <Loader2 className="w-4 h-4 text-amber-700 animate-spin shrink-0" />
-                    <span>{fundingNotice}</span>
-                  </div>
-                )}
-                <QRDisplay
-                  value={buildZip321Uri({
-                    address: generatedEscrowAddress,
-                    amountZec: parseFloat(amountZec),
-                    memo: memo || "VeilX Shielded Tip",
-                  })}
-                  address={generatedEscrowAddress}
-                  amountZec={parseFloat(amountZec)}
-                  memo={memo || "VeilX Shielded Tip"}
-                  onPaymentConfirmed={(txid) => handleFundTip(txid)}
-                />
+                {fundingNotice ? (
+                  <div className="p-5 bg-butter-50 border border-butter-200 rounded-3xl space-y-4 text-center shadow-subtle animate-in fade-in zoom-in-95">
+                    <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
+                      <div className="absolute inset-0 rounded-full bg-amber-400/20 animate-ping" />
+                      <div className="w-14 h-14 bg-amber-100 text-amber-800 rounded-2xl border border-amber-300 flex items-center justify-center shadow-sm">
+                        <Loader2 className="w-7 h-7 animate-spin text-amber-700" />
+                      </div>
+                    </div>
 
-                {/* Transaction Hash Input for manual verification */}
-                <div className="p-3.5 bg-butter-50 border border-butter-200 rounded-2xl space-y-2">
-                  <label className="text-[11px] font-bold text-brown-900 block">
-                    Transaction Hash (txid)
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={fundingTxidInput}
-                      onChange={(e) => {
-                        setFundingTxidInput(e.target.value);
-                        setErrorNotice(null);
-                      }}
-                      placeholder="Paste Zcash transaction hash..."
-                      className="text-xs font-mono"
+                    <div>
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold mb-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                        <span>Payment Broadcasted on Zcash Blockchain</span>
+                      </div>
+                      <h4 className="text-lg font-bold text-brown-950">Awaiting 1 Block Confirmation</h4>
+                      <p className="text-xs text-brown-600 mt-1 max-w-sm mx-auto leading-relaxed">
+                        Your shielded tip has been detected in the mempool! Zcash consensus requires 1 confirmed block to seal your note into the Orchard Merkle tree before private deposit for @{selectedUser.username}.
+                      </p>
+                    </div>
+
+                    {(() => {
+                      const activeTxid = confirmedTxid || fundingTxidInput;
+                      if (!activeTxid) return null;
+                      return (
+                        <div className="p-3 bg-white border border-butter-300 rounded-2xl space-y-1.5 text-left shadow-subtle">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-brown-500 uppercase tracking-wider">
+                              Transaction Hash (txid)
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(activeTxid);
+                                  setCopiedTxid(true);
+                                  setTimeout(() => setCopiedTxid(false), 2000);
+                                }}
+                                className="text-[11px] font-semibold text-brown-700 hover:text-brown-950 flex items-center gap-1 transition-colors"
+                              >
+                                {copiedTxid ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                                <span>{copiedTxid ? "Copied" : "Copy"}</span>
+                              </button>
+                              <a
+                                href={getZcashExplorerUrl(activeTxid)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[11px] font-semibold text-brown-700 hover:text-brown-950 flex items-center gap-1 transition-colors"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>Explorer</span>
+                              </a>
+                            </div>
+                          </div>
+                          <p className="font-mono text-xs text-brown-950 break-all bg-butter-50/50 p-2 rounded-xl border border-butter-200">
+                            {activeTxid}
+                          </p>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="grid grid-cols-3 gap-2 pt-1 text-center">
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl">
+                        <span className="text-[10px] uppercase font-bold text-emerald-700 block">1. Broadcast</span>
+                        <span className="text-xs font-bold text-emerald-950 flex items-center justify-center gap-1 mt-0.5">
+                          ✓ Sent
+                        </span>
+                      </div>
+                      <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl">
+                        <span className="text-[10px] uppercase font-bold text-amber-700 block">2. On-Chain Seal</span>
+                        <span className="text-xs font-bold text-amber-950 flex items-center justify-center gap-1 mt-0.5">
+                          <Loader2 className="w-3 h-3 animate-spin text-amber-700" /> Confirming
+                        </span>
+                      </div>
+                      <div className="p-2.5 bg-butter-100 border border-butter-200 rounded-xl text-brown-400">
+                        <span className="text-[10px] uppercase font-bold text-brown-400 block">3. Shielded Escrow</span>
+                        <span className="text-xs font-bold text-brown-500 block mt-0.5">Vault deposit</span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-brown-500 italic">
+                      This modal will automatically transition once block 1 is sealed. You can safely close or remain on this screen.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <QRDisplay
+                      value={buildZip321Uri({
+                        address: generatedEscrowAddress,
+                        amountZec: parseFloat(amountZec),
+                        memo: memo || "VeilX Shielded Tip",
+                      })}
+                      address={generatedEscrowAddress}
+                      amountZec={parseFloat(amountZec)}
+                      memo={memo || "VeilX Shielded Tip"}
+                      onPaymentConfirmed={(txid) => handleFundTip(txid)}
                     />
-                  </div>
-                  <p className="text-[10px] text-brown-500">
-                    Sent from Zashi, Ywallet, or Zingo? Paste the transaction ID here to record on-chain proof.
-                  </p>
-                </div>
 
-                <div className="pt-1 text-center space-y-2">
-                  <Button
-                    onClick={() => handleFundTip()}
-                    variant="primary"
-                    className="w-full h-11 text-xs font-bold gap-2"
-                    isLoading={isFundingTip}
-                    disabled={!fundingTxidInput.trim() || isFundingTip}
-                  >
-                    <span>Confirm On-Chain Funding</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </Button>
-                </div>
+                    {/* Transaction Hash Input for manual verification */}
+                    <div className="p-3.5 bg-butter-50 border border-butter-200 rounded-2xl space-y-2">
+                      <label className="text-[11px] font-bold text-brown-900 block">
+                        Transaction Hash (txid)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={fundingTxidInput}
+                          onChange={(e) => {
+                            setFundingTxidInput(e.target.value);
+                            setErrorNotice(null);
+                          }}
+                          placeholder="Paste Zcash transaction hash..."
+                          className="text-xs font-mono"
+                        />
+                      </div>
+                      <p className="text-[10px] text-brown-500">
+                        Sent from Zashi, Ywallet, or Zingo? Paste the transaction ID here to record on-chain proof.
+                      </p>
+                    </div>
+
+                    <div className="pt-1 text-center space-y-2">
+                      <Button
+                        onClick={() => handleFundTip()}
+                        variant="primary"
+                        className="w-full h-11 text-xs font-bold gap-2"
+                        isLoading={isFundingTip}
+                        disabled={!fundingTxidInput.trim() || isFundingTip}
+                      >
+                        <span>Confirm On-Chain Funding</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             )
           )}

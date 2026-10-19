@@ -268,6 +268,27 @@ export class UFVKWatcherService {
       reason: "NOTE_NOT_DECRYPTED: No matching incoming Orchard note found for platform UFVK.",
     };
   }
+
+  /**
+   * Searches detected notes by escrow address, expected amount, or memo.
+   * Enables autonomous mobile detection (Zashi / Ywallet) without manual txid entry.
+   */
+  findNoteByAddressOrMemo(params: {
+    expectedAmountZec: number;
+    expectedMemo?: string;
+    depositAddress?: string;
+  }): DecryptedEscrowNote | null {
+    const expectedZats = Math.round(params.expectedAmountZec * 1e8);
+    for (const note of this.detectedNotes.values()) {
+      if (!note.txid) continue;
+      const amountMatches = note.value_zatoshis >= expectedZats * 0.999;
+      const memoMatches = params.expectedMemo && note.memo_text && note.memo_text.includes(params.expectedMemo);
+      if (amountMatches && (memoMatches || !params.expectedMemo)) {
+        return note;
+      }
+    }
+    return null;
+  }
 }
 
 // Global Singleton Instance

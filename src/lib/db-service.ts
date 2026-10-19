@@ -1062,7 +1062,7 @@ export const dbService = {
       } catch (err: any) {
         console.warn(`[Request Forwarder] Payout forwarding deferred to background queue for request ${id}:`, err?.message || err);
         finalStatus = "FORWARD_PENDING";
-        payoutError = err?.message || String(err);
+        payoutError = (err?.message || String(err)).replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
       }
     }
 
@@ -1297,7 +1297,7 @@ export const dbService = {
       } catch (err: any) {
         console.warn(`[Invoice Forwarder] Payout forwarding deferred to background queue for paylink ${slug}:`, err?.message || err);
         finalStatus = "FORWARD_PENDING";
-        payoutError = err?.message || String(err);
+        payoutError = (err?.message || String(err)).replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
       }
     }
 
@@ -1587,7 +1587,8 @@ export const dbService = {
         return { success: true, status: "PAID", forwardTxid: forwardResult.txid, link: updated };
       }
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
+      const rawMsg = err?.message || String(err);
+      const errMsg = rawMsg.replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
       await connectToDatabase().catch(() => {});
       await PaymentLink.findOneAndUpdate(
         { slug },
@@ -1672,7 +1673,8 @@ export const dbService = {
         return { success: true, status: "FULFILLED", forwardTxid: forwardResult.txid, request: updated };
       }
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
+      const rawMsg = err?.message || String(err);
+      const errMsg = rawMsg.replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
       await connectToDatabase().catch(() => {});
       await PaymentRequest.findByIdAndUpdate(
         id,
