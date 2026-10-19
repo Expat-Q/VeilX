@@ -53,7 +53,7 @@ export default function PayLinkInvoicePage() {
         .then((data) => {
           if (data.success && data.paylink) {
             setPaylink(data.paylink);
-            if (data.paylink.status === "PAID") {
+            if (data.paylink.status === "PAID" || data.paylink.status === "FORWARD_PENDING") {
               setIsPaid(true);
               setIsSettling(false);
             } else if (data.paylink.status === "SETTLING") {
@@ -91,7 +91,7 @@ export default function PayLinkInvoicePage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        if (data.paylink?.status === "PAID") {
+        if (data.paylink?.status === "PAID" || data.paylink?.status === "FORWARD_PENDING") {
           setIsPaid(true);
           setIsSettling(false);
         } else {
@@ -222,7 +222,7 @@ export default function PayLinkInvoicePage() {
                       });
                       const data = await res.json().catch(() => ({}));
                       if (res.ok && data.success) {
-                        if (data.paylink?.status === "PAID") {
+                        if (data.paylink?.status === "PAID" || data.paylink?.status === "FORWARD_PENDING") {
                           setIsPaid(true);
                           setIsSettling(false);
                         } else {

@@ -7,7 +7,8 @@
 import init, { WebWallet } from "./webzjs_wallet.js";
 import initVeilX, * as veilxEngine from "./veilx_wallet.js";
 
-const TESTNET_GRPC_WEB_URL = "https://zcash-testnet.chainsafe.dev";
+const TESTNET_GRPC_WEB_URL = "https://tee.testnet.unsafe.zec.rocks";
+const MAINNET_GRPC_WEB_URL = "https://tee.unsafe.zec.rocks";
 const DB_STORAGE_KEY = "veilx_shielded_db_v1";
 const ACC_ID_STORAGE_KEY = "veilx_shielded_account_id_v1";
 const TREE_STATE_KEY = "veilx_orchard_tree_state_v1";
@@ -22,8 +23,14 @@ let activeAccountId = 1;
 
 // Concurrency Mutex to prevent simultaneous SQLite writes/reads in Wasm
 let isOperating = false;
-async function acquireWalletLock() {
+async function acquireWalletLock(timeoutMs = 5000) {
+  const start = Date.now();
   while (isOperating) {
+    if (Date.now() - start > timeoutMs) {
+      console.warn("[VeilX Offscreen] Wallet lock acquisition timed out after " + timeoutMs + "ms; forcing release.");
+      isOperating = false;
+      break;
+    }
     await new Promise((r) => setTimeout(r, 60));
   }
   isOperating = true;
@@ -211,80 +218,499 @@ async function persistSentHistory(history) {
 }
 
 // Trial-decrypt and track Orchard actions from a sync response
-async function processOrchardActions(actions, fvkHex, blockHeight) {
-  if (!actions || actions.length === 0) return;
+function processOrchardActions(actions, candidateFvks, blockHeight, spendableNotes, sentHistory) {
+  if (!actions || actions.length === 0) return { notesChanged: false, sentChanged: false };
 
-  const spendableNotes = await loadSpendableNotes();
-  const sentHistory = await loadSentHistory();
+  const fvks = Array.isArray(candidateFvks) ? candidateFvks : [candidateFvks];
   let notesChanged = false;
   let sentChanged = false;
 
   for (const act of actions) {
-    // Trial-decrypt incoming notes using IVK
-    try {
-      const dec = veilxEngine.try_decrypt_orchard_output({
-        fvk_hex: fvkHex,
-        nullifier_hex: act.nullifier_hex,
-        cmx_hex: act.cmx_hex,
-        epk_hex: act.epk_hex,
-        enc_ciphertext_hex: act.enc_ciphertext_hex,
-      });
-      if (dec) {
-        // Track in commitment tree for future spending
-        veilxEngine.tree_track_note(act.cmx_hex);
-
-        spendableNotes.push({
-          cmx_hex: act.cmx_hex,
-          nullifier_hex: act.nullifier_hex,
-          recipient_address_hex: dec.recipient_address_hex,
-          value_zatoshis: dec.value_zatoshis,
-          memo_text: dec.memo_text,
-          rho_hex: dec.rho_hex,
-          rseed_hex: dec.rseed_hex,
-          is_change: dec.is_change,
-          block_height: blockHeight,
-          spent: false,
-        });
-        notesChanged = true;
-        console.log(`[VeilX Offscreen] ✓ Decrypted incoming note: ${dec.value_zatoshis} zats at height ${blockHeight}`);
-      }
-    } catch (decErr) {
-      // Note decryption failure is expected for notes not belonging to this wallet
-    }
-
-    // Recover outgoing sends via OVK
-    if (act.out_ciphertext_hex && act.cv_net_hex) {
+    for (const fvkHex of fvks) {
+      if (!fvkHex) continue;
+      // Trial-decrypt incoming notes using IVK
       try {
-        const rec = veilxEngine.recover_outgoing_orchard_output({
-          fvk_or_ovk_hex: fvkHex,
-          cv_net_hex: act.cv_net_hex,
+        const dec = veilxEngine.try_decrypt_orchard_output({
+          fvk_hex: fvkHex,
+          nullifier_hex: act.nullifier_hex,
           cmx_hex: act.cmx_hex,
           epk_hex: act.epk_hex,
           enc_ciphertext_hex: act.enc_ciphertext_hex,
-          out_ciphertext_hex: act.out_ciphertext_hex,
-          nullifier_hex: act.nullifier_hex,
         });
-        if (rec) {
-          sentHistory.push({
-            recipient_address_hex: rec.recipient_address_hex,
-            value_zatoshis: rec.value_zatoshis,
-            memo_text: rec.memo_text,
-            block_height: blockHeight,
-            timestamp: Date.now(),
-          });
-          sentChanged = true;
-          console.log(`[VeilX Offscreen] ✓ Recovered outgoing send: ${rec.value_zatoshis} zats at height ${blockHeight}`);
+        if (dec) {
+          // Track in commitment tree for future spending
+          veilxEngine.tree_track_note(act.cmx_hex);
+
+          if (!spendableNotes.some((n) => n.cmx_hex === act.cmx_hex)) {
+            spendableNotes.push({
+              cmx_hex: act.cmx_hex,
+              nullifier_hex: act.nullifier_hex,
+              recipient_address_hex: dec.recipient_address_hex,
+              value_zatoshis: dec.value_zatoshis,
+              memo_text: dec.memo_text,
+              rho_hex: dec.rho_hex,
+              rseed_hex: dec.rseed_hex,
+              is_change: dec.is_change,
+              block_height: blockHeight,
+              spent: false,
+              txid: act.txid || "",
+            });
+            notesChanged = true;
+            console.log(`[VeilX Offscreen] ✓ Decrypted incoming note: ${dec.value_zatoshis} zats at height ${blockHeight}`);
+          }
+          break; // Output decrypted successfully with this FVK!
         }
-      } catch {
-        // OVK recovery failure is expected for non-owned sends
+      } catch (decErr) {
+        // Decryption failure expected for outputs not belonging to this wallet
+      }
+
+      // Recover outgoing sends via OVK
+      if (act.out_ciphertext_hex && act.cv_net_hex) {
+        try {
+          const rec = veilxEngine.recover_outgoing_orchard_output({
+            fvk_or_ovk_hex: fvkHex,
+            cv_net_hex: act.cv_net_hex,
+            cmx_hex: act.cmx_hex,
+            epk_hex: act.epk_hex,
+            enc_ciphertext_hex: act.enc_ciphertext_hex,
+            out_ciphertext_hex: act.out_ciphertext_hex,
+            nullifier_hex: act.nullifier_hex,
+          });
+          if (rec) {
+            sentHistory.push({
+              recipient_address_hex: rec.recipient_address_hex,
+              value_zatoshis: rec.value_zatoshis,
+              memo_text: rec.memo_text,
+              block_height: blockHeight,
+              timestamp: Date.now(),
+              txid: act.txid || "",
+            });
+            sentChanged = true;
+            console.log(`[VeilX Offscreen] ✓ Recovered outgoing send: ${rec.value_zatoshis} zats at height ${blockHeight}`);
+            break;
+          }
+        } catch {
+          // OVK recovery failure expected for non-owned sends
+        }
       }
     }
   }
 
-  if (notesChanged) await persistSpendableNotes(spendableNotes);
-  if (sentChanged) await persistSentHistory(sentHistory);
+  return { notesChanged, sentChanged };
 }
-async function getOrInitWallet(rawMnemonic, birthdayHeight = null, forceRecreate = false) {
+
+// Byte and protobuf parsing helpers for single-threaded compact block streaming
+function bytesToHex(bytes) {
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+function decodeVarint(buf, offset) {
+  let res = 0n;
+  let shift = 0n;
+  let pos = offset;
+  while (pos < buf.length) {
+    const b = BigInt(buf[pos++]);
+    res |= (b & 0x7fn) << shift;
+    if ((b & 0x80n) === 0n) break;
+    shift += 7n;
+  }
+  return { val: res, nextOffset: pos };
+}
+
+function encodeVarint(val) {
+  const bytes = [];
+  let current = val;
+  while (current > 0x7f) {
+    bytes.push((current & 0x7f) | 0x80);
+    current >>>= 7;
+  }
+  bytes.push(current);
+  return bytes;
+}
+
+function parseCompactOrchardAction(buf) {
+  let pos = 0;
+  const action = {};
+  while (pos < buf.length) {
+    const { val: tagVal, nextOffset: p1 } = decodeVarint(buf, pos);
+    const fieldNum = Number(tagVal >> 3n);
+    const wireType = Number(tagVal & 7n);
+    pos = p1;
+    if (wireType === 2) {
+      const { val: len, nextOffset: p2 } = decodeVarint(buf, pos);
+      const start = p2;
+      const end = start + Number(len);
+      const bytes = buf.subarray(start, end);
+      pos = end;
+      if (fieldNum === 1) action.nullifier_hex = bytesToHex(bytes);
+      if (fieldNum === 2) action.cmx_hex = bytesToHex(bytes);
+      if (fieldNum === 3) action.epk_hex = bytesToHex(bytes);
+      if (fieldNum === 4) action.enc_ciphertext_hex = bytesToHex(bytes);
+      if (fieldNum === 5) action.out_ciphertext_hex = bytesToHex(bytes);
+      if (fieldNum === 6) action.cv_net_hex = bytesToHex(bytes);
+    } else {
+      break;
+    }
+  }
+  return action;
+}
+
+function parseCompactTx(buf) {
+  let pos = 0;
+  const tx = { actions: [] };
+  let rawHashBytes = null;
+  while (pos < buf.length) {
+    const { val: tagVal, nextOffset: p1 } = decodeVarint(buf, pos);
+    const fieldNum = Number(tagVal >> 3n);
+    const wireType = Number(tagVal & 7n);
+    pos = p1;
+    if (wireType === 0) {
+      const { val, nextOffset: p2 } = decodeVarint(buf, pos);
+      pos = p2;
+      if (fieldNum === 1) tx.index = Number(val);
+      if (fieldNum === 3) tx.fee = Number(val);
+    } else if (wireType === 2) {
+      const { val: len, nextOffset: p2 } = decodeVarint(buf, pos);
+      const start = p2;
+      const end = start + Number(len);
+      const bytes = buf.subarray(start, end);
+      pos = end;
+      if (fieldNum === 2) {
+        rawHashBytes = bytes;
+        tx.hash = bytesToHex(bytes);
+      }
+      if (fieldNum === 6 || fieldNum === 9) {
+        const act = parseCompactOrchardAction(bytes);
+        tx.actions.push(act);
+      }
+    } else {
+      break;
+    }
+  }
+
+  const displayTxid = rawHashBytes
+    ? Array.from(rawHashBytes).reverse().map((b) => b.toString(16).padStart(2, "0")).join("")
+    : "";
+  for (const act of tx.actions) {
+    act.txid = displayTxid;
+  }
+
+  return tx;
+}
+
+function parseCompactBlock(buf) {
+  let pos = 0;
+  const block = { vtx: [] };
+  while (pos < buf.length) {
+    const { val: tagVal, nextOffset: p1 } = decodeVarint(buf, pos);
+    const fieldNum = Number(tagVal >> 3n);
+    const wireType = Number(tagVal & 7n);
+    pos = p1;
+    if (wireType === 0) {
+      const { val, nextOffset: p2 } = decodeVarint(buf, pos);
+      pos = p2;
+      if (fieldNum === 1) block.protoVersion = Number(val);
+      if (fieldNum === 2) block.height = Number(val);
+      if (fieldNum === 5) block.time = Number(val);
+    } else if (wireType === 2) {
+      const { val: len, nextOffset: p2 } = decodeVarint(buf, pos);
+      const start = p2;
+      const end = start + Number(len);
+      const bytes = buf.subarray(start, end);
+      pos = end;
+      if (fieldNum === 3) block.hash = bytesToHex(bytes);
+      if (fieldNum === 4) block.prevHash = bytesToHex(bytes);
+      if (fieldNum === 6) block.header = bytesToHex(bytes);
+      if (fieldNum === 7) block.vtx.push(parseCompactTx(bytes));
+    } else {
+      break;
+    }
+  }
+  return block;
+}
+
+function parseGrpcWebBlocks(u8Array) {
+  let pos = 0;
+  const blocks = [];
+  while (pos + 5 <= u8Array.length) {
+    const flags = u8Array[pos];
+    const len = (u8Array[pos + 1] << 24) | (u8Array[pos + 2] << 16) | (u8Array[pos + 3] << 8) | u8Array[pos + 4];
+    pos += 5;
+    if (flags === 0x00 && len > 0) {
+      const msgBytes = u8Array.subarray(pos, pos + len);
+      blocks.push(parseCompactBlock(msgBytes));
+    }
+    pos += len;
+  }
+  return blocks;
+}
+
+async function fetchLatestBlockHeight(grpcUrl) {
+  const body = new Uint8Array([0, 0, 0, 0, 0]);
+  const res = await fetch(grpcUrl + "/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetLatestBlock", {
+    method: "POST",
+    headers: { "content-type": "application/grpc-web+proto", "x-grpc-web": "1" },
+    body,
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status} fetching latest block`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.length < 5) throw new Error("Invalid gRPC-Web response from GetLatestBlock");
+  const len = (buf[1] << 24) | (buf[2] << 16) | (buf[3] << 8) | buf[4];
+  const msg = buf.subarray(5, 5 + len);
+  let pos = 0;
+  let height = 0;
+  let hash = "";
+  while (pos < msg.length) {
+    const { val: tagVal, nextOffset: p1 } = decodeVarint(msg, pos);
+    const fieldNum = Number(tagVal >> 3n);
+    const wireType = Number(tagVal & 7n);
+    pos = p1;
+    if (wireType === 0) {
+      const { val, nextOffset: p2 } = decodeVarint(msg, pos);
+      pos = p2;
+      if (fieldNum === 1) height = Number(val);
+    } else if (wireType === 2) {
+      const { val: l, nextOffset: p2 } = decodeVarint(msg, pos);
+      pos = p2 + Number(l);
+      if (fieldNum === 2) hash = bytesToHex(msg.subarray(p2, pos));
+    } else {
+      break;
+    }
+  }
+  return { height, hash };
+}
+
+async function fetchCompactBlockRange(startHeight, endHeight, grpcUrl) {
+  const h1 = encodeVarint(startHeight);
+  const h2 = encodeVarint(endHeight);
+  const blockId1 = [0x08, ...h1];
+  const blockId2 = [0x08, ...h2];
+  const payload = [0x0a, blockId1.length, ...blockId1, 0x12, blockId2.length, ...blockId2];
+  const body = new Uint8Array([0, 0, 0, 0, payload.length, ...payload]);
+
+  const res = await fetch(grpcUrl + "/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetBlockRange", {
+    method: "POST",
+    headers: { "content-type": "application/grpc-web+proto", "x-grpc-web": "1" },
+    body,
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status} fetching block range ${startHeight}-${endHeight}`);
+  const buf = await res.arrayBuffer();
+  return parseGrpcWebBlocks(new Uint8Array(buf));
+}
+
+let activeSyncJob = null;
+
+async function syncShieldedNative(payload) {
+  if (activeSyncJob) {
+    console.log("[VeilX Offscreen] Shielded sync already in flight, returning active job promise.");
+    return activeSyncJob;
+  }
+
+  activeSyncJob = (async () => {
+    try {
+      await ensureVeilxReady();
+      const { mnemonic, birthdayHeight, forceRecreate, network = "testnet" } = payload;
+      const grpcEndpoint = network === "mainnet" ? MAINNET_GRPC_WEB_URL : TESTNET_GRPC_WEB_URL;
+
+      const candidateFvks = [];
+      try {
+        const a0 = veilxEngine.derive_orchard_account(mnemonic, 0, network);
+        if (a0?.fvk_hex) candidateFvks.push(a0.fvk_hex);
+      } catch {}
+      try {
+        const a1 = veilxEngine.derive_orchard_account(mnemonic, 1, network);
+        if (a1?.fvk_hex && !candidateFvks.includes(a1.fvk_hex)) candidateFvks.push(a1.fvk_hex);
+      } catch {}
+      try {
+        const aMain = veilxEngine.derive_orchard_account(mnemonic, 0, "mainnet");
+        if (aMain?.fvk_hex && !candidateFvks.includes(aMain.fvk_hex)) candidateFvks.push(aMain.fvk_hex);
+      } catch {}
+      if (payload.extraFvkHex && !candidateFvks.includes(payload.extraFvkHex)) {
+        candidateFvks.push(payload.extraFvkHex);
+      }
+      console.log(`[VeilX Offscreen] Loaded ${candidateFvks.length} candidate Orchard Viewing Keys for note discovery.`);
+
+      const lastScannedKey = `LAST_SCANNED_HEIGHT_${network}`;
+      if (forceRecreate) {
+        await persistValue(lastScannedKey, null);
+        await persistSpendableNotes([]);
+      }
+
+      // 1. Fetch live tip height directly from lightwalletd
+      const { height: tipHeight } = await fetchLatestBlockHeight(grpcEndpoint);
+      if (!tipHeight || tipHeight === 0) {
+        throw new Error("Unable to retrieve latest block height from lightwalletd.");
+      }
+
+      let lastScanned = await loadPersistedValue(lastScannedKey);
+      let startHeight;
+      if (birthdayHeight && Number(birthdayHeight) > 0 && (!lastScanned || Number(birthdayHeight) < Number(lastScanned))) {
+        startHeight = Number(birthdayHeight);
+        const existingNotes = await loadSpendableNotes();
+        const filtered = existingNotes.filter((n) => n.block_height < startHeight);
+        await persistSpendableNotes(filtered);
+      } else if (lastScanned && Number(lastScanned) > 0) {
+        startHeight = Number(lastScanned) + 1;
+      } else if (birthdayHeight && Number(birthdayHeight) > 0) {
+        startHeight = Number(birthdayHeight);
+      } else {
+        startHeight = Math.max(0, tipHeight - 150);
+      }
+
+      console.log(`[VeilX Offscreen] Shielded sync: Scanning blocks ${startHeight} -> ${tipHeight} (${network})...`);
+
+      if (startHeight > tipHeight) {
+        // Already fully up to date
+        const notes = await loadSpendableNotes();
+        const unspent = notes.filter((n) => !n.spent);
+        const totalZats = unspent.reduce((sum, n) => sum + BigInt(n.value_zatoshis || 0), 0n);
+
+        chrome.runtime.sendMessage({
+          type: "VEILX_SYNC_PROGRESS_UPDATE",
+          stage: "synced",
+          progressPct: 100,
+          scannedHeight: tipHeight,
+          tipHeight,
+        }).catch(() => {});
+
+        return {
+          success: true,
+          summary: {
+            chainTipHeight: tipHeight,
+            fullyScannedHeight: tipHeight,
+            progressPercent: 100,
+            totalShieldedZats: totalZats.toString(),
+            saplingZats: "0",
+            orchardZats: totalZats.toString(),
+            unshieldedZats: "0",
+            totalShieldedTaz: (Number(totalZats) / 1e8).toFixed(4),
+          },
+        };
+      }
+
+      chrome.runtime.sendMessage({
+        type: "VEILX_SYNC_PROGRESS_UPDATE",
+        stage: "scanning",
+        progressPct: 0,
+        scannedHeight: startHeight,
+        tipHeight,
+      }).catch(() => {});
+
+      const chunkSize = 150;
+      const totalBlocks = Math.max(1, tipHeight - startHeight);
+
+      for (let chunkStart = startHeight; chunkStart <= tipHeight; chunkStart += chunkSize) {
+        const chunkEnd = Math.min(tipHeight, chunkStart + chunkSize - 1);
+        const blocks = await fetchCompactBlockRange(chunkStart, chunkEnd, grpcEndpoint);
+
+        const spendableNotes = await loadSpendableNotes();
+        const sentHistory = await loadSentHistory();
+        let notesChanged = false;
+        let sentChanged = false;
+
+        for (const block of blocks) {
+          const commitments = [];
+          const actions = [];
+
+          for (const tx of (block.vtx || [])) {
+            for (const act of (tx.actions || [])) {
+              if (act.nullifier_hex) {
+                const match = spendableNotes.find((n) => !n.spent && n.nullifier_hex === act.nullifier_hex);
+                if (match) {
+                  match.spent = true;
+                  notesChanged = true;
+                  console.log(`[VeilX Offscreen] Note spent at block ${block.height}: ${match.value_zatoshis} zats`);
+                }
+              }
+              if (act.cmx_hex) commitments.push(act.cmx_hex);
+              actions.push(act);
+            }
+          }
+
+          if (commitments.length > 0) {
+            veilxEngine.tree_append_commitments(commitments);
+          }
+
+          if (actions.length > 0) {
+            const res = processOrchardActions(actions, candidateFvks, block.height, spendableNotes, sentHistory);
+            if (res.notesChanged) notesChanged = true;
+            if (res.sentChanged) sentChanged = true;
+          }
+
+          veilxEngine.tree_create_checkpoint(block.height, block.hash || "0".repeat(64));
+        }
+
+        if (notesChanged) {
+          await persistSpendableNotes(spendableNotes);
+        }
+        if (sentChanged) {
+          await persistSentHistory(sentHistory);
+        }
+
+        await persistValue(lastScannedKey, chunkEnd);
+        await persistTreeState();
+
+        const completedBlocks = Math.max(0, chunkEnd - startHeight);
+        const pct = Math.min(99, Math.max(1, Math.round((completedBlocks / totalBlocks) * 100)));
+
+        chrome.runtime.sendMessage({
+          type: "VEILX_SYNC_PROGRESS_UPDATE",
+          stage: "scanning",
+          progressPct: pct,
+          scannedHeight: chunkEnd,
+          tipHeight,
+        }).catch(() => {});
+      }
+
+      await persistValue(lastScannedKey, tipHeight);
+      await persistTreeState();
+
+      chrome.runtime.sendMessage({
+        type: "VEILX_SYNC_PROGRESS_UPDATE",
+        stage: "synced",
+        progressPct: 100,
+        scannedHeight: tipHeight,
+        tipHeight,
+      }).catch(() => {});
+
+      const finalNotes = await loadSpendableNotes();
+      const unspent = finalNotes.filter((n) => !n.spent);
+      const totalZats = unspent.reduce((sum, n) => sum + BigInt(n.value_zatoshis || 0), 0n);
+
+      return {
+        success: true,
+        summary: {
+          chainTipHeight: tipHeight,
+          fullyScannedHeight: tipHeight,
+          progressPercent: 100,
+          totalShieldedZats: totalZats.toString(),
+          saplingZats: "0",
+          orchardZats: totalZats.toString(),
+          unshieldedZats: "0",
+          totalShieldedTaz: (Number(totalZats) / 1e8).toFixed(4),
+        },
+      };
+    } catch (err) {
+      console.error("[VeilX Offscreen] Sync error:", err);
+      chrome.runtime.sendMessage({
+        type: "VEILX_SYNC_PROGRESS_UPDATE",
+        stage: "failed",
+        progressPct: 0,
+        error: err?.message || String(err),
+      }).catch(() => {});
+      return { success: false, error: err?.message || String(err) };
+    } finally {
+      activeSyncJob = null;
+    }
+  })();
+
+  return activeSyncJob;
+}
+async function getOrInitWallet(rawMnemonic, birthdayHeight = null, forceRecreate = false, network = "testnet") {
   await ensureWasmReady();
   const mnemonic = (rawMnemonic || "").trim().toLowerCase().replace(/\s+/g, " ");
 
@@ -312,19 +738,45 @@ async function getOrInitWallet(rawMnemonic, birthdayHeight = null, forceRecreate
   let savedDbBytes = forceRecreate ? null : await loadPersistedDbBytes();
   activeAccountId = forceRecreate ? 1 : await loadPersistedAccountId();
 
+  const netParam = network === "mainnet" ? "main" : "test";
+  const grpcUrl = network === "mainnet" ? MAINNET_GRPC_WEB_URL : TESTNET_GRPC_WEB_URL;
+
   console.log(
-    `[VeilX Offscreen] Spawning WebWallet (testnet: ${TESTNET_GRPC_WEB_URL}, cached DB: ${
+    `[VeilX Offscreen] Spawning WebWallet (${network}: ${grpcUrl}, cached DB: ${
       savedDbBytes ? savedDbBytes.length + " bytes" : "none"
     }, forceRecreate: ${forceRecreate})...`
   );
 
   try {
-    activeWallet = new WebWallet("test", TESTNET_GRPC_WEB_URL, 1, 1, savedDbBytes);
+    activeWallet = new WebWallet(netParam, grpcUrl, 1, 1, savedDbBytes);
     activeMnemonic = mnemonic;
   } catch (wErr) {
     console.warn("[VeilX Offscreen] WebWallet worker initialization deferred (MV3 restricted worker):", wErr?.message || wErr);
     activeWallet = null;
     return null;
+  }
+
+  // Sanity check existing database: if anchored to an obsolete birthday with 0 balance, reset it
+  if (savedDbBytes && activeWallet) {
+    try {
+      const summary = await activeWallet.get_wallet_summary();
+      const dbBirthday = Number(summary?.birthday_height || 0);
+      const isTestnet = network === "testnet";
+      const minReasonable = isTestnet ? 4510000 : 3500000;
+
+      if (dbBirthday > 0 && dbBirthday < minReasonable) {
+        const { totalShieldedZats } = parseBalancesFromSummary(summary);
+        if (totalShieldedZats === 0n) {
+          console.log(`[VeilX Offscreen] Detected obsolete wallet birthday in DB (${dbBirthday} < ${minReasonable}). Recreating database with target birthday...`);
+          await clearPersistedDbBytes();
+          try { activeWallet.free(); } catch {}
+          activeWallet = null;
+          return getOrInitWallet(rawMnemonic, birthdayHeight, true, network);
+        }
+      }
+    } catch (e) {
+      console.warn("[VeilX Offscreen] Birthday sanity check note:", e?.message || e);
+    }
   }
 
   if (!savedDbBytes && activeWallet) {
@@ -338,13 +790,21 @@ async function getOrInitWallet(rawMnemonic, birthdayHeight = null, forceRecreate
       return activeWallet;
     }
     let targetBirthday = birthdayHeight;
-    if (!targetBirthday) {
+    const isTestnet = network === "testnet";
+    const minReasonable = isTestnet ? 2000000 : 2000000;
+    if (!targetBirthday || targetBirthday < minReasonable) {
       try {
         const latest = await activeWallet.get_latest_block();
-        targetBirthday = Math.max(0, Number(latest) - 10);
+        const tipNum = Number(latest || 0);
+        if (tipNum > 0) {
+          targetBirthday = Math.max(0, tipNum - 250);
+        }
       } catch {
-        targetBirthday = 4500400;
+        targetBirthday = isTestnet ? 4515200 : 3522000;
       }
+    }
+    if (!targetBirthday || targetBirthday < minReasonable) {
+      targetBirthday = isTestnet ? 4515200 : 3522000;
     }
     console.log("[VeilX Offscreen] Initializing account from mnemonic with targeted birthday:", targetBirthday);
     try {
@@ -395,41 +855,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     switch (action) {
       case "INIT_PROVER": {
-        await ensureWasmReady();
-        if (payload?.mnemonic) {
-          await getOrInitWallet(payload.mnemonic, payload.birthdayHeight, payload.forceRecreate);
-        }
+        await ensureVeilxReady();
         return { success: true };
       }
 
       case "INIT_WALLET_ACCOUNT": {
-        const { mnemonic, birthdayHeight, forceRecreate } = payload;
+        const { mnemonic, network = "testnet" } = payload;
         await ensureVeilxReady();
-        const nativeAcc = veilxEngine.derive_orchard_account(mnemonic, 0, "testnet");
-
-        let unifiedAddress = nativeAcc.unified_address;
-        let transparentAddress = nativeAcc.transparent_address;
-        let accountId = 1;
-
-        try {
-          await ensureWasmReady();
-          const wallet = await getOrInitWallet(mnemonic, birthdayHeight, forceRecreate);
-          if (wallet) {
-            accountId = activeAccountId || 1;
-            const wUa = await wallet.get_current_address(accountId);
-            const wTa = await wallet.get_current_address_transparent(accountId);
-            if (wUa) unifiedAddress = wUa;
-            if (wTa) transparentAddress = wTa;
-          }
-        } catch (wErr) {
-          console.warn("[VeilX Offscreen] Background WebWallet initialization note:", wErr?.message || wErr);
-        }
+        const nativeAcc = veilxEngine.derive_orchard_account(mnemonic, 0, network);
 
         return {
           success: true,
-          accountId,
-          unifiedAddress,
-          transparentAddress,
+          accountId: 1,
+          unifiedAddress: nativeAcc.unified_address,
+          transparentAddress: nativeAcc.transparent_address,
           nativeOrchard: nativeAcc,
         };
       }
@@ -453,63 +892,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case "SYNC_SHIELDED": {
-        await acquireWalletLock();
-        try {
-          const { mnemonic, birthdayHeight, forceRecreate } = payload;
-          let summaryJson = null;
-
-          try {
-            const wallet = await getOrInitWallet(mnemonic, birthdayHeight, forceRecreate);
-            if (wallet) {
-              console.log("[VeilX Offscreen] Starting background compact block scan via gRPC-Web...");
-              await wallet.sync();
-
-              const summary = await wallet.get_wallet_summary();
-              const updatedBytes = await wallet.db_to_bytes();
-              await persistDbBytes(updatedBytes);
-
-              const { totalShieldedZats, saplingZats, orchardZats, unshieldedZats } = parseBalancesFromSummary(summary);
-              const tip = Number(summary?.chain_tip_height || 0);
-              const scanned = Number(summary?.fully_scanned_height || 0);
-              const progressPct = tip > 0 && scanned > 0 ? Math.min(100, Math.round((scanned / tip) * 100)) : 100;
-
-              summaryJson = {
-                chainTipHeight: tip,
-                fullyScannedHeight: scanned,
-                progressPercent: progressPct,
-                totalShieldedZats: totalShieldedZats.toString(),
-                saplingZats: saplingZats.toString(),
-                orchardZats: orchardZats.toString(),
-                unshieldedZats: unshieldedZats.toString(),
-                totalShieldedTaz: (Number(totalShieldedZats) / 1e8).toFixed(4),
-              };
-            }
-          } catch (syncErr) {
-            console.warn("[VeilX Offscreen] WebWallet sync note (fallback to native store):", syncErr?.message || syncErr);
-          }
-
-          if (!summaryJson) {
-            const notes = await loadSpendableNotes();
-            const unspent = notes.filter((n) => !n.spent);
-            const totalZats = unspent.reduce((sum, n) => sum + BigInt(n.value_zatoshis || 0), 0n);
-            const targetHeight = birthdayHeight || 3518000;
-            summaryJson = {
-              chainTipHeight: targetHeight,
-              fullyScannedHeight: targetHeight,
-              progressPercent: 100,
-              totalShieldedZats: totalZats.toString(),
-              saplingZats: "0",
-              orchardZats: totalZats.toString(),
-              unshieldedZats: "0",
-              totalShieldedTaz: (Number(totalZats) / 1e8).toFixed(4),
-            };
-          }
-
-          console.log("[VeilX Offscreen] ✓ Sync summary ready:", summaryJson);
-          return { success: true, summary: summaryJson };
-        } finally {
-          releaseWalletLock();
-        }
+        return await syncShieldedNative(payload);
       }
 
       case "SEND_SHIELDED": {
@@ -600,110 +983,66 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case "RESET_SHIELDED_DB": {
-        await acquireWalletLock();
-        try {
-          const { mnemonic, birthdayHeight } = payload;
-          await clearPersistedDbBytes();
-          if (activeWallet) {
-            try {
-              activeWallet.free();
-            } catch {}
-            activeWallet = null;
-          }
-          let summaryJson = null;
+        await clearPersistedDbBytes();
+        if (activeWallet) {
           try {
-            const wallet = await getOrInitWallet(mnemonic, birthdayHeight, true);
-            if (wallet) {
-              console.log("[VeilX Offscreen] Performing compact block scan after cache reset...");
-              await wallet.sync();
-              const summary = await wallet.get_wallet_summary();
-              const updatedBytes = await wallet.db_to_bytes();
-              await persistDbBytes(updatedBytes);
-              const { totalShieldedZats, saplingZats, orchardZats, unshieldedZats } = parseBalancesFromSummary(summary);
-              const tip = Number(summary?.chain_tip_height || 0);
-              const scanned = Number(summary?.fully_scanned_height || 0);
-              summaryJson = {
-                chainTipHeight: tip,
-                fullyScannedHeight: scanned,
-                progressPercent: 100,
-                totalShieldedZats: totalShieldedZats.toString(),
-                saplingZats: saplingZats.toString(),
-                orchardZats: orchardZats.toString(),
-                unshieldedZats: unshieldedZats.toString(),
-                totalShieldedTaz: (Number(totalShieldedZats) / 1e8).toFixed(4),
-              };
-            }
-          } catch (resetErr) {
-            console.warn("[VeilX Offscreen] WebWallet reset scan note:", resetErr?.message || resetErr);
-          }
-
-          if (!summaryJson) {
-            const notes = await loadSpendableNotes();
-            const unspent = notes.filter((n) => !n.spent);
-            const totalZats = unspent.reduce((sum, n) => sum + BigInt(n.value_zatoshis || 0), 0n);
-            const targetHeight = birthdayHeight || 3518000;
-            summaryJson = {
-              chainTipHeight: targetHeight,
-              fullyScannedHeight: targetHeight,
-              progressPercent: 100,
-              totalShieldedZats: totalZats.toString(),
-              saplingZats: "0",
-              orchardZats: totalZats.toString(),
-              unshieldedZats: "0",
-              totalShieldedTaz: (Number(totalZats) / 1e8).toFixed(4),
-            };
-          }
-
-          return { success: true, summary: summaryJson };
-        } finally {
-          releaseWalletLock();
+            activeWallet.free();
+          } catch {}
+          activeWallet = null;
         }
+        return await syncShieldedNative({
+          ...payload,
+          forceRecreate: true,
+        });
       }
 
       case "GET_TRANSACTION_HISTORY": {
-        await acquireWalletLock();
         try {
-          const { mnemonic, limit = 20, offset = 0 } = payload || {};
-          const wallet = await getOrInitWallet(mnemonic);
-          if (!wallet) return { success: true, transactions: [] };
-          const accountId = activeAccountId || 1;
-          let history = null;
-          try {
-            history = await wallet.get_transaction_history(accountId, limit, offset);
-          } catch (histErr) {
-            console.log("[VeilX Offscreen] get_transaction_history query note:", histErr?.message || histErr);
-            return { success: true, transactions: [] };
-          }
+          const spendableNotes = await loadSpendableNotes();
+          const sentHistory = await loadSentHistory();
 
-          const txs = (history?.transactions || []).map((t) => ({
-            txid: t.txid,
-            transactionType: t.transaction_type,
-            status: t.status,
-            valueZats: t.value?.toString() || "0",
-            valueTaz: (Number(t.value || 0) / 1e8).toFixed(4),
-            blockHeight: t.block_height,
-            timestamp: t.timestamp ? Number(t.timestamp) * 1000 : Date.now(),
-            memo: t.memo || "",
+          const incomingTxs = spendableNotes.map((n) => ({
+            txid: n.txid || ("0x" + (n.cmx_hex || "").slice(0, 16)),
+            transactionType: "received",
+            status: n.spent ? "spent" : "confirmed",
+            valueZats: (n.value_zatoshis || 0).toString(),
+            valueTaz: (Number(n.value_zatoshis || 0) / 1e8).toFixed(4),
+            blockHeight: n.block_height || 0,
+            timestamp: Date.now(),
+            memo: n.memo_text || "",
           }));
 
-          return { success: true, transactions: txs };
+          const outgoingTxs = sentHistory.map((s) => ({
+            txid: s.txid || "sent",
+            transactionType: "sent",
+            status: "confirmed",
+            valueZats: (s.value_zatoshis || 0).toString(),
+            valueTaz: (Number(s.value_zatoshis || 0) / 1e8).toFixed(4),
+            blockHeight: s.block_height || 0,
+            timestamp: s.timestamp || Date.now(),
+            memo: s.memo_text || "",
+          }));
+
+          const allTxs = [...incomingTxs, ...outgoingTxs];
+          allTxs.sort((a, b) => (b.blockHeight || 0) - (a.blockHeight || 0));
+
+          return { success: true, transactions: allTxs };
         } catch (e) {
           console.warn("[VeilX Offscreen] get_transaction_history warning:", e?.message || e);
           return { success: true, transactions: [] };
-        } finally {
-          releaseWalletLock();
         }
       }
 
       case "GET_LATEST_BLOCK": {
-        // Reuse existing wallet connection if available.
-        // If no wallet is initialized yet, throw so background.js
-        // falls back to the public testnet API / Zebra RPC.
-        if (!activeWallet) {
-          throw new Error("No active wallet session — use public API fallback.");
+        try {
+          const net = payload?.network || "testnet";
+          const grpcEndpoint = net === "mainnet" ? MAINNET_GRPC_WEB_URL : TESTNET_GRPC_WEB_URL;
+          const { height } = await fetchLatestBlockHeight(grpcEndpoint);
+          return { latestBlockHeight: height.toString() };
+        } catch (e) {
+          console.warn("[VeilX Offscreen] get_latest_block warning:", e?.message || e);
+          throw e;
         }
-        const latest = await activeWallet.get_latest_block();
-        return { latestBlockHeight: latest.toString() };
       }
 
       // ─── Native VeilX Orchard Tree & Spend Operations ───

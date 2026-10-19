@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: veilx-app
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ZCASH_NETWORK
+        value: mainnet
+      - key: NEXT_PUBLIC_ZCASH_NETWORK
+        value: mainnet
+      - key: ENABLE_TESTNET_SIMULATION
+        value: "false"
+      - key: MONGODB_URI
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: TWITTER_CLIENT_ID
+        sync: false
+      - key: TWITTER_CLIENT_SECRET
+        sync: false
+      - key: TWITTER_CALLBACK_URL
+        sync: false
+      - key: TWITTER_BEARER_TOKEN
+        sync: false
+      - key: ZALLET_RPC_URL
+        sync: false
+      - key: ZALLET_RPC_API_KEY
+        sync: false
+      - key: NOWNODES_RPC_URL
+        sync: false
+      - key: NOWNODES_API_KEY
+        sync: false
+      - key: ESCROW_PLATFORM_SPENDING_KEY
+        sync: false
+      - key: ESCROW_PLATFORM_TRANSPARENT_KEY
+        sync: false
+      - key: ESCROW_PLATFORM_TRANSPARENT_ADDRESS
+        sync: false
+      - key: ESCROW_PLATFORM_UFVK
+        sync: false
+      - key: ESCROW_BIRTHDAY_HEIGHT
+        sync: false

@@ -28,6 +28,8 @@ const requiredEntries = [
   "manifest.json",
   "popup.html",
   "popup.js",
+  "approval.html",
+  "approval.js",
   "background.js",
   "content.js",
   "inpage.js",

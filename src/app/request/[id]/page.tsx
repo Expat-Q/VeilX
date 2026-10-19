@@ -60,7 +60,7 @@ export default function RequestDetailsPage() {
         .then((data) => {
           if (data.success && data.request) {
             setRequestData(data.request);
-            if (data.request.status === "FULFILLED") {
+            if (data.request.status === "FULFILLED" || data.request.status === "FORWARD_PENDING") {
               setIsPaid(true);
               setIsSettling(false);
             } else if (data.request.status === "CANCELLED") {
@@ -122,7 +122,7 @@ export default function RequestDetailsPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        if (data.request?.status === "FULFILLED") {
+        if (data.request?.status === "FULFILLED" || data.request?.status === "FORWARD_PENDING") {
           setIsPaid(true);
           setIsSettling(false);
         } else {
@@ -286,7 +286,7 @@ export default function RequestDetailsPage() {
                       });
                       const data = await res.json().catch(() => ({}));
                       if (res.ok && data.success) {
-                        if (data.request?.status === "FULFILLED") {
+                        if (data.request?.status === "FULFILLED" || data.request?.status === "FORWARD_PENDING") {
                           setIsPaid(true);
                           setIsSettling(false);
                         } else {

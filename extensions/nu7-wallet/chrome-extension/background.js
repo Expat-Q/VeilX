@@ -141,7 +141,104 @@ async function getWalletState() {
   return null;
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+const pendingApprovals = new Map();
+
+async function getAuthorizedOrigins() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["veilxAuthorizedOrigins"], (data) => {
+      resolve(new Set(data?.veilxAuthorizedOrigins || []));
+    });
+  });
+}
+
+async function addAuthorizedOrigin(origin) {
+  if (!origin) return;
+  const set = await getAuthorizedOrigins();
+  set.add(origin);
+  await new Promise((resolve) => {
+    chrome.storage.local.set({ veilxAuthorizedOrigins: Array.from(set) }, resolve);
+  });
+}
+
+async function requestUserApproval(origin, method, params, network, ticker) {
+  return new Promise((resolve, reject) => {
+    const id = "appr_" + Math.random().toString(36).substring(2, 10) + "_" + Date.now();
+    const reqData = {
+      id,
+      origin,
+      method,
+      params,
+      network,
+      ticker,
+      createdAt: Date.now(),
+    };
+
+    let windowId = null;
+    const timeout = setTimeout(() => {
+      if (pendingApprovals.has(id)) {
+        pendingApprovals.delete(id);
+        if (windowId && chrome.windows && chrome.windows.remove) {
+          try { chrome.windows.remove(windowId); } catch {}
+        }
+        reject(new Error("Transaction authorization timed out after 120 seconds."));
+      }
+    }, 120000);
+
+    const approvalEntry = {
+      reqData,
+      windowId: null,
+      resolve: (val) => {
+        clearTimeout(timeout);
+        resolve(val);
+      },
+      reject: (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      },
+    };
+    pendingApprovals.set(id, approvalEntry);
+
+    if (chrome.windows && chrome.windows.create) {
+      chrome.windows.create(
+        {
+          url: chrome.runtime.getURL("approval.html?id=" + encodeURIComponent(id)),
+          type: "popup",
+          width: 380,
+          height: 560,
+          focused: true,
+        },
+        (win) => {
+          const lastErr = chrome.runtime.lastError;
+          if (lastErr || !win) {
+            clearTimeout(timeout);
+            pendingApprovals.delete(id);
+            reject(new Error("Failed to open approval window: " + (lastErr?.message || "unknown error")));
+            return;
+          }
+          approvalEntry.windowId = win.id;
+        }
+      );
+    } else {
+      clearTimeout(timeout);
+      pendingApprovals.delete(id);
+      reject(new Error("Extension window manager is unavailable for authorization."));
+    }
+  });
+}
+
+if (chrome.windows && chrome.windows.onRemoved) {
+  chrome.windows.onRemoved.addListener((closedWindowId) => {
+    for (const [id, appr] of pendingApprovals.entries()) {
+      if (appr.windowId === closedWindowId) {
+        pendingApprovals.delete(id);
+        appr.reject(new Error("User closed the authorization window without approving."));
+        break;
+      }
+    }
+  });
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return false;
 
   // Session Vault Management from Popup
@@ -162,6 +259,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" });
     }
     console.log("[VeilX Background] 🔒 Vault session locked; keys wiped from worker memory.");
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Handle DApp Approval Prompt queries and user decisions
+  if (message.type === "VEILX_GET_APPROVAL_REQUEST") {
+    const appr = pendingApprovals.get(message.id);
+    sendResponse({ request: appr ? appr.reqData : null });
+    return true;
+  }
+
+  if (message.type === "VEILX_RESOLVE_APPROVAL") {
+    const appr = pendingApprovals.get(message.id);
+    if (appr) {
+      pendingApprovals.delete(message.id);
+      if (message.approved) {
+        appr.resolve(true);
+      } else {
+        appr.reject(new Error("User rejected the authorization request."));
+      }
+    }
     sendResponse({ success: true });
     return true;
   }
@@ -194,6 +312,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         mnemonic: message.mnemonic,
         birthdayHeight: message.birthdayHeight,
         forceRecreate: message.forceRecreate,
+        network: message.network || "testnet",
       });
     })()
       .then((result) => sendResponse({ result }))
@@ -207,10 +326,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (!vault || !vault.mnemonic) {
         throw new Error("Vault is locked or uninitialized.");
       }
+      const extraFvk = vault.account?.orchard?.fvk_hex || vault.account?.orchard_fvk_hex || null;
       return sendOffscreenMessage("SYNC_SHIELDED", {
         mnemonic: vault.mnemonic,
-        birthdayHeight: message.birthdayHeight || vault.birthdayHeight || 4500400,
+        birthdayHeight: message.birthdayHeight || vault.birthdayHeight || 4515200,
         forceRecreate: message.forceRecreate,
+        network: message.network || vault.network || "testnet",
+        extraFvkHex: extraFvk,
       });
     })()
       .then((result) => sendResponse({ result }))
@@ -363,13 +485,43 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       throw new Error("VeilX wallet is locked or uninitialized. Please open and unlock your VeilX extension.");
     }
 
+    const trustedOrigin = sender?.origin || (sender?.url ? new URL(sender.url).origin : "Unknown Application");
     const netKey = (state && state.network === "mainnet") ? "mainnet" : "testnet";
     const netCfg = NETWORKS[netKey];
 
     switch (method) {
       case "zcash_connect":
-      case "zcash_requestAccounts":
+      case "zcash_requestAccounts": {
+        const authorized = await getAuthorizedOrigins();
+        if (!authorized.has(trustedOrigin)) {
+          await requestUserApproval(trustedOrigin, method, params, netCfg.name, netCfg.ticker);
+          await addAuthorizedOrigin(trustedOrigin);
+        }
+        const primaryShielded = state.unifiedAddress || state.address;
+        return {
+          transparent: state.address,
+          shielded: primaryShielded,
+          accounts: [
+            {
+              id: "veilx-0",
+              label: "VeilX Account 1",
+              walletId: "veilx",
+              accountId: "0",
+              addresses: {
+                transparent: state.address,
+                shielded: primaryShielded,
+              },
+            },
+          ],
+        };
+      }
+
       case "zcash_getAccounts": {
+        const authorized = await getAuthorizedOrigins();
+        if (!authorized.has(trustedOrigin)) {
+          await requestUserApproval(trustedOrigin, method, params, netCfg.name, netCfg.ticker);
+          await addAuthorizedOrigin(trustedOrigin);
+        }
         const primaryShielded = state.unifiedAddress || state.address;
         return {
           transparent: state.address,
@@ -473,6 +625,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const amount = parseFloat(txParam.amount);
         if (!to) throw new Error("Invalid parameters: 'to' recipient address is required.");
         if (isNaN(amount) || amount <= 0) throw new Error("Invalid parameters: 'amount' must be greater than 0.");
+
+        // Mandatory user approval prompt: cannot be bypassed by web scripts
+        await requestUserApproval(trustedOrigin, method, params, netCfg.name, netCfg.ticker);
+
         const amountZatoshis = BigInt(Math.round(amount * 1e8));
 
         // If recipient is shielded or funding source is explicitly shielded: use WebAssembly Prover!
@@ -612,6 +768,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (!vault || !vault.account) {
           throw new Error("VeilX wallet is locked. Please unlock the extension to sign messages.");
         }
+
+        // Mandatory user approval prompt for cryptographic message signing
+        await requestUserApproval(trustedOrigin, method, params, netCfg.name, netCfg.ticker);
+
         const core = self.VeilXWalletCore || globalThis.VeilXWalletCore;
         if (!core || typeof core.signZcashMessage !== "function") {
           throw new Error("Cryptographic core does not support message signing.");
@@ -630,6 +790,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case "zcash_disconnect": {
+        const authorized = await getAuthorizedOrigins();
+        if (authorized.has(trustedOrigin)) {
+          authorized.delete(trustedOrigin);
+          await new Promise((resolve) => {
+            chrome.storage.local.set({ veilxAuthorizedOrigins: Array.from(authorized) }, resolve);
+          });
+        }
         return true;
       }
 

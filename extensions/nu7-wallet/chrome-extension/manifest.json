@@ -13,13 +13,19 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
+  "cross_origin_embedder_policy": {
+    "value": "require-corp"
+  },
+  "cross_origin_opener_policy": {
+    "value": "same-origin"
+  },
   "host_permissions": ["http://localhost:*/*", "http://127.0.0.1:*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "VeilX Shielded Wallet (0x37A5165B)",
+    "default_title": "VeilX Shielded Wallet",
     "default_icon": {
       "16": "icon-16.png",
       "32": "icon-32.png",
@@ -43,6 +49,8 @@
         "icon-128.png",
         "offscreen.html",
         "offscreen.js",
+        "approval.html",
+        "approval.js",
         "veilx_wallet.js",
         "veilx_wallet_bg.wasm",
         "webzjs_wallet.js",

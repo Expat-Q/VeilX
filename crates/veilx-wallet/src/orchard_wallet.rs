@@ -19,7 +19,7 @@ use orchard::{
     },
     note_encryption::{
         CompactAction, NoteBytesData,
-        OrchardDomain, COMPACT_NOTE_SIZE, ENC_CIPHERTEXT_SIZE,
+        OrchardDomain, IronwoodDomain, COMPACT_NOTE_SIZE, ENC_CIPHERTEXT_SIZE,
     },
     primitives::redpallas::{self, SpendAuth},
     tree::{Anchor, MerkleHashOrchard, MerklePath},
@@ -547,6 +547,41 @@ pub fn try_decrypt_orchard_output(
                 is_change: true,
             }));
         }
+
+        // Try IronwoodDomain (NU7 / Ironwood pool)
+        let iw_domain = IronwoodDomain::for_action(&action);
+        if let Some((note, recipient, memo)) = try_note_decryption(&iw_domain, &ext_ivk, &action) {
+            let memo_text = String::from_utf8(memo.to_vec())
+                .unwrap_or_default()
+                .trim_matches(char::from(0))
+                .to_string();
+
+            return Ok(Some(DecryptedOrchardNote {
+                recipient_address_hex: hex::encode(recipient.to_raw_address_bytes()),
+                value_zatoshis: note.value().inner(),
+                memo_text,
+                memo_hex: hex::encode(&memo[..]),
+                rho_hex: hex::encode(note.rho().to_bytes()),
+                rseed_hex: hex::encode(note.rseed().as_bytes()),
+                is_change: false,
+            }));
+        }
+        if let Some((note, recipient, memo)) = try_note_decryption(&iw_domain, &int_ivk, &action) {
+            let memo_text = String::from_utf8(memo.to_vec())
+                .unwrap_or_default()
+                .trim_matches(char::from(0))
+                .to_string();
+
+            return Ok(Some(DecryptedOrchardNote {
+                recipient_address_hex: hex::encode(recipient.to_raw_address_bytes()),
+                value_zatoshis: note.value().inner(),
+                memo_text,
+                memo_hex: hex::encode(&memo[..]),
+                rho_hex: hex::encode(note.rho().to_bytes()),
+                rseed_hex: hex::encode(note.rseed().as_bytes()),
+                is_change: true,
+            }));
+        }
     } else if enc_ciphertext.len() >= COMPACT_NOTE_SIZE {
         let mut compact_arr = [0u8; COMPACT_NOTE_SIZE];
         compact_arr.copy_from_slice(&enc_ciphertext[..COMPACT_NOTE_SIZE]);
@@ -558,7 +593,6 @@ pub fn try_decrypt_orchard_output(
         );
 
         let domain = OrchardDomain::for_compact_action(&compact_action);
-
         let ext_ivk = fvk.to_ivk(Scope::External).prepare();
         if let Some((note, recipient)) = try_compact_note_decryption(&domain, &ext_ivk, &compact_action) {
             return Ok(Some(DecryptedOrchardNote {
@@ -574,6 +608,31 @@ pub fn try_decrypt_orchard_output(
 
         let int_ivk = fvk.to_ivk(Scope::Internal).prepare();
         if let Some((note, recipient)) = try_compact_note_decryption(&domain, &int_ivk, &compact_action) {
+            return Ok(Some(DecryptedOrchardNote {
+                recipient_address_hex: hex::encode(recipient.to_raw_address_bytes()),
+                value_zatoshis: note.value().inner(),
+                memo_text: String::new(),
+                memo_hex: String::new(),
+                rho_hex: hex::encode(note.rho().to_bytes()),
+                rseed_hex: hex::encode(note.rseed().as_bytes()),
+                is_change: true,
+            }));
+        }
+
+        // Try IronwoodDomain for compact notes
+        let iw_domain = IronwoodDomain::for_compact_action(&compact_action);
+        if let Some((note, recipient)) = try_compact_note_decryption(&iw_domain, &ext_ivk, &compact_action) {
+            return Ok(Some(DecryptedOrchardNote {
+                recipient_address_hex: hex::encode(recipient.to_raw_address_bytes()),
+                value_zatoshis: note.value().inner(),
+                memo_text: String::new(),
+                memo_hex: String::new(),
+                rho_hex: hex::encode(note.rho().to_bytes()),
+                rseed_hex: hex::encode(note.rseed().as_bytes()),
+                is_change: false,
+            }));
+        }
+        if let Some((note, recipient)) = try_compact_note_decryption(&iw_domain, &int_ivk, &compact_action) {
             return Ok(Some(DecryptedOrchardNote {
                 recipient_address_hex: hex::encode(recipient.to_raw_address_bytes()),
                 value_zatoshis: note.value().inner(),
@@ -708,4 +767,191 @@ mod tests {
         assert_eq!(acc.spending_key_hex.len(), 64);
         assert_eq!(acc.orchard_raw_address_hex.len(), 86);
     }
+
+    #[test]
+    fn test_user_fvk_derivation() {
+        let ofvk_hex = "335bbc4b8dfac50ecc39a94af8e401cc9967269ab00e3505625b91930385eb2defc89e8471a3d011c58fe08d4b36c59737bd52a24b557537c58522008dd67c182bb755c240d9ae886806768e209236590b2a3274d1e89fcdcf632aef5537c933";
+        let ofvk_bytes = hex::decode(ofvk_hex).unwrap();
+        let fvk = FullViewingKey::read(&ofvk_bytes[..]).unwrap();
+        for di_num in 0..10 {
+            let di = orchard::keys::DiversifierIndex::from(di_num as u32);
+            let addr = fvk.address_at(di, Scope::External);
+            println!("DI {}: raw_orchard={}", di_num, hex::encode(addr.to_raw_address_bytes()));
+        }
+
+        let tfvk_hex = "03551794dd60da87cdfd1c3ad782cf3b83f2b08bb482d008f8ae1204ce6f3c5e20201e0a410dfb892caef6c266c20dffddb0355c0694fb6d4fa41c1edcc5549346";
+        let tfvk_bytes = hex::decode(tfvk_hex).unwrap();
+        let mut parent_pk = [0u8; 33];
+        parent_pk.copy_from_slice(&tfvk_bytes[..33]);
+        let mut parent_cc = [0u8; 32];
+        parent_cc.copy_from_slice(&tfvk_bytes[33..]);
+
+        let (change_pk, change_cc) = crate::keys::bip32_derive_public_normal(&parent_pk, &parent_cc, 0).unwrap();
+        let (addr_pk, _) = crate::keys::bip32_derive_public_normal(&change_pk, &change_cc, 0).unwrap();
+        let sha = sha2::Sha256::digest(&addr_pk);
+        let h160 = ripemd::Ripemd160::digest(&sha);
+        let t_addr = crate::keys::base58_check_encode(&[0x1d, 0x25], &h160);
+        println!("Derived Transparent Address from TFVK: {}", t_addr);
+        println!("Derived Hash160: {}", hex::encode(&h160));
+    }
+
+    #[test]
+    fn test_decrypt_tx_actions() {
+        use std::fs;
+        let tx_bytes = fs::read("../../scripts/tx.bin").expect("Read tx.bin");
+        println!("tx.bin len = {}", tx_bytes.len());
+
+        let ofvk_hex = "335bbc4b8dfac50ecc39a94af8e401cc9967269ab00e3505625b91930385eb2defc89e8471a3d011c58fe08d4b36c59737bd52a24b557537c58522008dd67c182bb755c240d9ae886806768e209236590b2a3274d1e89fcdcf632aef5537c933";
+        let ofvk_bytes = hex::decode(ofvk_hex).unwrap();
+        let fvk = FullViewingKey::read(&ofvk_bytes[..]).unwrap();
+
+        // Search for known cmx
+        let cmx1 = hex::decode("ac11f885ffa70e0d2767260bff6b02488c7fac7f98f83a33ac353d448f44051f").unwrap();
+        let pos1 = tx_bytes.windows(32).position(|w| w == cmx1.as_slice()).expect("Found cmx1");
+        println!("Action 0 at pos {}", pos1 - 96);
+
+        // ZIP-225 Action layout: cv(32), nullifier(32), rk(32), cmx(32), epk(32), enc(580), out(80) = 820 bytes
+        let act_start = pos1 - 96;
+        for i in 0..2 {
+            let a_offset = act_start + i * 820;
+            if a_offset + 820 > tx_bytes.len() {
+                println!("Action {} exceeds buffer", i);
+                break;
+            }
+            let chunk = &tx_bytes[a_offset..a_offset + 820];
+            let nf_bytes: [u8; 32] = chunk[32..64].try_into().unwrap();
+            let cmx_bytes: [u8; 32] = chunk[96..128].try_into().unwrap();
+            let epk_bytes: [u8; 32] = chunk[128..160].try_into().unwrap();
+            let enc_bytes = &chunk[160..160 + 580];
+            let out_bytes = &chunk[160 + 580..160 + 580 + 80];
+
+            println!("Action {}: cmx={}", i, hex::encode(cmx_bytes));
+
+            // 1. Try IVK decryption with OrchardDomain and IronwoodDomain
+            let res = try_decrypt_orchard_output(
+                ofvk_hex,
+                &nf_bytes,
+                &cmx_bytes,
+                &epk_bytes,
+                enc_bytes,
+            );
+            println!("  OrchardDomain IVK dec result: {:?}", res);
+
+            // Test IronwoodDomain IVK
+            let nullifier: Option<Nullifier> = Nullifier::from_bytes(&nf_bytes).into();
+            let cmx: Option<ExtractedNoteCommitment> = ExtractedNoteCommitment::from_bytes(&cmx_bytes).into();
+            if let (Some(nf), Some(cm)) = (nullifier, cmx) {
+                let mut enc_arr = [0u8; 580];
+                enc_arr.copy_from_slice(enc_bytes);
+                let transmitted = TransmittedNoteCiphertext {
+                    epk_bytes,
+                    enc_ciphertext: NoteBytesData(enc_arr),
+                    out_ciphertext: [0u8; 80],
+                };
+                let ask_bytes: [u8; 32] = pallas::Scalar::ONE.to_repr();
+                let ask = redpallas::SigningKey::<SpendAuth>::try_from(ask_bytes).unwrap();
+                let dummy_rk: redpallas::VerificationKey<SpendAuth> = (&ask).into();
+                let dummy_cv: Option<ValueCommitment> = ValueCommitment::from_bytes(&pallas::Point::generator().to_bytes()).into();
+                if let (Some(cv), Some(cv2)) = (dummy_cv.clone(), dummy_cv) {
+                    if let Ok(action) = Action::from_parts(nf, dummy_rk, cm, transmitted, cv2, ()) {
+                        let iw_domain = IronwoodDomain::for_action(&action);
+                        for scope in [Scope::External, Scope::Internal] {
+                            let ivk = fvk.to_ivk(scope).prepare();
+                            if let Some((note, recipient, _memo)) = try_note_decryption(&iw_domain, &ivk, &action) {
+                                println!("  🎯 IRONWOOD IVK MATCH! Scope {:?}, value: {} zatoshis", scope, note.value().inner());
+                                println!("    Recipient: {}", hex::encode(recipient.to_raw_address_bytes()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Try OVK recovery
+            for scope in [Scope::External, Scope::Internal] {
+                let ovk = fvk.to_ovk(scope);
+                let cv_bytes: [u8; 32] = chunk[0..32].try_into().unwrap();
+                let dummy_cv: Option<ValueCommitment> = ValueCommitment::from_bytes(&cv_bytes).into();
+                let nullifier: Option<Nullifier> = Nullifier::from_bytes(&nf_bytes).into();
+                let cmx: Option<ExtractedNoteCommitment> = ExtractedNoteCommitment::from_bytes(&cmx_bytes).into();
+
+                if let (Some(cv), Some(nf), Some(cm)) = (dummy_cv, nullifier, cmx) {
+                    let mut enc_arr = [0u8; 580];
+                    enc_arr.copy_from_slice(enc_bytes);
+                    let mut out_arr = [0u8; 80];
+                    out_arr.copy_from_slice(out_bytes);
+
+                    let transmitted = TransmittedNoteCiphertext {
+                        epk_bytes,
+                        enc_ciphertext: NoteBytesData(enc_arr),
+                        out_ciphertext: out_arr,
+                    };
+                    let ask_bytes: [u8; 32] = pallas::Scalar::ONE.to_repr();
+                    let ask = redpallas::SigningKey::<SpendAuth>::try_from(ask_bytes).unwrap();
+                    let dummy_rk: redpallas::VerificationKey<SpendAuth> = (&ask).into();
+
+                    let action_cv = cv.clone();
+                    if let Ok(action) = Action::from_parts(nf, dummy_rk, cm, transmitted, action_cv, ()) {
+                        let domain = OrchardDomain::for_action(&action);
+                        if let Some((note, recipient, _memo)) = try_output_recovery_with_ovk(&domain, &ovk, &action, &cv, &out_arr) {
+                            println!("  🎯 OVK RECOVERY SUCCESS (Scope {:?})! Value: {} zatoshis", scope, note.value().inner());
+                            println!("    Recipient: {}", hex::encode(recipient.to_raw_address_bytes()));
+                        }
+                        let iw_domain = IronwoodDomain::for_action(&action);
+                        if let Some((note, recipient, _memo)) = try_output_recovery_with_ovk(&iw_domain, &ovk, &action, &cv, &out_arr) {
+                            println!("  🎯 IRONWOOD OVK RECOVERY SUCCESS (Scope {:?})! Value: {} zatoshis", scope, note.value().inner());
+                            println!("    Recipient: {}", hex::encode(recipient.to_raw_address_bytes()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_decrypt_ironwood_action() {
+        let ofvk_hex = "335bbc4b8dfac50ecc39a94af8e401cc9967269ab00e3505625b91930385eb2defc89e8471a3d011c58fe08d4b36c59737bd52a24b557537c58522008dd67c182bb755c240d9ae886806768e209236590b2a3274d1e89fcdcf632aef5537c933";
+        let ofvk_bytes = hex::decode(ofvk_hex).unwrap();
+        let fvk = FullViewingKey::read(&ofvk_bytes[..]).unwrap();
+
+        let nf_bytes: [u8; 32] = hex::decode("881ad232b04f69983cc4237f772493ee4cc3ff537067b62ecd327a26afaf7d0c").unwrap().try_into().unwrap();
+        let cmx_bytes: [u8; 32] = hex::decode("04dc942230eb73e6ba0c3a3bd253267499268dcae0352901bf04aa62341acb1b").unwrap().try_into().unwrap();
+        let epk_bytes: [u8; 32] = hex::decode("202f040ab2b95fb23207e8341e0eee83f8d975a6161d7320b575e9a746bcbb28").unwrap().try_into().unwrap();
+        let enc_bytes = hex::decode("75dadae15690f98ef2bda28d21c2f784a4cb4a82aff8807d373db9adb78ad44b310093169accb7696728d0e9c617f750d72bbae1").unwrap();
+
+        let nullifier: Nullifier = Nullifier::from_bytes(&nf_bytes).unwrap();
+        let cmx: ExtractedNoteCommitment = ExtractedNoteCommitment::from_bytes(&cmx_bytes).unwrap();
+        let ephemeral_key = EphemeralKeyBytes(epk_bytes);
+        let mut compact_arr = [0u8; COMPACT_NOTE_SIZE];
+        compact_arr.copy_from_slice(&enc_bytes[..COMPACT_NOTE_SIZE]);
+
+        let compact_action = CompactAction::from_parts(
+            nullifier,
+            cmx,
+            ephemeral_key,
+            compact_arr,
+        );
+
+        let iw_domain = IronwoodDomain::for_compact_action(&compact_action);
+        let or_domain = OrchardDomain::for_compact_action(&compact_action);
+
+        for scope in [Scope::External, Scope::Internal] {
+            let ivk = fvk.to_ivk(scope).prepare();
+            if let Some((note, recipient)) = try_compact_note_decryption(&iw_domain, &ivk, &compact_action) {
+                println!("🎯🎯🎯 MATCH FOUND WITH IronwoodDomain! Scope: {:?}, Value: {} zatoshis", scope, note.value().inner());
+                println!("  Recipient raw address: {}", hex::encode(recipient.to_raw_address_bytes()));
+            } else {
+                println!("IronwoodDomain Scope {:?}: No match", scope);
+            }
+
+            if let Some((note, recipient)) = try_compact_note_decryption(&or_domain, &ivk, &compact_action) {
+                println!("🎯🎯🎯 MATCH FOUND WITH OrchardDomain! Scope: {:?}, Value: {} zatoshis", scope, note.value().inner());
+                println!("  Recipient raw address: {}", hex::encode(recipient.to_raw_address_bytes()));
+            } else {
+                println!("OrchardDomain Scope {:?}: No match", scope);
+            }
+        }
+    }
 }
+
+
+

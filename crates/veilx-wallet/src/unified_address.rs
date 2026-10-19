@@ -221,4 +221,46 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_user_address() {
+        use zcash_address::unified::{Address, Container, Encoding, Receiver};
+        let ua = "utest1ur70vc90n7q6kej5k8q2r3e74kgvexszentyvnllg37u9mcfku40u7muclnrfpm5urux66cmsrcs9fkhs6f2vmazeu85t266e30x53fshcr6f6ll6c3rwzpm4dgh9cuad9ntp6jl44zes8wz8ggn6sax69g8uau27xa7kg0acueavtpha3geztzrl6k4nnw9y30uv6cajm4djp480pg";
+        let res = Address::decode(ua);
+        match res {
+            Ok((net, addr)) => {
+                println!("Network: {:?}", net);
+                for r in addr.items() {
+                    match r {
+                        Receiver::P2pkh(d) => {
+                            let t = crate::keys::base58_check_encode(&[0x1d, 0x25], &d);
+                            println!("USER P2PKH: {:?}, Base58: {}", hex::encode(d), t);
+                        }
+                        Receiver::P2sh(d) => println!("USER P2SH: {:?}", hex::encode(d)),
+                        Receiver::Sapling(d) => println!("USER Sapling: {:?}", hex::encode(d)),
+                        Receiver::Orchard(d) => println!("USER Orchard: {:?}", hex::encode(d)),
+                        _ => println!("USER Other: {:?}", r),
+                    }
+                }
+            }
+            Err(e) => println!("Decode failed: {:?}", e),
+        }
+
+        println!("\n--- DECODING NOIR ADDRESS ---");
+        let noir_ua = "utest1899z3dvmxu8ccv6qpw8ujev2t9vx7sez02wqw72rxp2nq9ctlaj58rw7z9maqzrznwe8dhu53vp0falmpv8l5qjhrsymlzyu5ysyjd64l8htat6h8vxjfz0haqvtvnqhcufrzfttzyqns0vv4lml9v898ksckxuw8ap80n72vsclvmdg";
+        let (net2, addr2) = Address::decode(noir_ua).expect("Decode noir_ua");
+        println!("Noir Network: {:?}", net2);
+        for r in addr2.items() {
+            match r {
+                Receiver::P2pkh(d) => {
+                    let t = crate::keys::base58_check_encode(&[0x1d, 0x25], &d);
+                    println!("NOIR P2PKH: {:?}, Base58: {}", hex::encode(d), t);
+                }
+                Receiver::P2sh(d) => println!("NOIR P2SH: {:?}", hex::encode(d)),
+                Receiver::Sapling(d) => println!("NOIR Sapling: {:?}", hex::encode(d)),
+                Receiver::Orchard(d) => println!("NOIR Orchard: {:?}", hex::encode(d)),
+                _ => println!("NOIR Other: {:?}", r),
+            }
+        }
+    }
 }

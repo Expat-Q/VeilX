@@ -314,11 +314,43 @@ function mnemonicToSeed(mnemonic, passphrase = "") {
   return mnemonicToSeedSync(mnemonic.trim().replace(/\\s+/g, " "), passphrase);
 }
 
+const SECP256K1_N = secp256k1.CURVE.n;
+
+function masterNodeFromSeed(seed) {
+  const I = hmac(sha512, new TextEncoder().encode("Bitcoin seed"), seed);
+  return { privateKey: I.slice(0, 32), chainCode: I.slice(32, 64) };
+}
+
+function deriveChildKey(parent, index, hardened) {
+  const data = new Uint8Array(37);
+  const actualIndex = hardened ? (index | 0x80000000) >>> 0 : index >>> 0;
+  if (hardened) {
+    data[0] = 0x00;
+    data.set(parent.privateKey, 1);
+  } else {
+    const pub = secp256k1.getPublicKey(parent.privateKey, true);
+    data.set(pub, 0);
+  }
+  const view = new DataView(data.buffer);
+  view.setUint32(33, actualIndex, false);
+  const I = hmac(sha512, parent.chainCode, data);
+  const IL = BigInt("0x" + bytesToHex(I.slice(0, 32)));
+  const kPar = BigInt("0x" + bytesToHex(parent.privateKey));
+  const childKeyInt = (IL + kPar) % SECP256K1_N;
+  const childHex = childKeyInt.toString(16).padStart(64, "0");
+  return { privateKey: hexToBytes(childHex), chainCode: I.slice(32, 64) };
+}
+
 function deriveAccountFromSeed(seed, accountIndex = 0, network = "testnet") {
-  const masterI = hmac(sha512, new TextEncoder().encode("Bitcoin seed"), seed);
-  const masterKey = masterI.slice(0, 32);
-  const masterChain = masterI.slice(32, 64);
-  const privKey = sha256(new Uint8Array([...masterKey, accountIndex]));
+  const coinType = network === "mainnet" ? 133 : 1;
+  let node = masterNodeFromSeed(seed);
+  node = deriveChildKey(node, 44, true); // 44'
+  node = deriveChildKey(node, coinType, true); // coinType'
+  node = deriveChildKey(node, accountIndex, true); // account'
+  node = deriveChildKey(node, 0, false); // 0 (external change)
+  node = deriveChildKey(node, 0, false); // 0 (index 0)
+
+  const privKey = node.privateKey;
   const pubBytes = secp256k1.getPublicKey(privKey, true);
   const pkh = hash160(pubBytes);
   const prefix = network === "testnet" ? new Uint8Array([0x1d, 0x25]) : new Uint8Array([0x1c, 0xb8]);
@@ -332,7 +364,6 @@ function deriveAccountFromSeed(seed, accountIndex = 0, network = "testnet") {
   const orchardRawReceiver = deriveOrchardRawReceiver(seed, accountIndex);
   const unifiedAddress = encodeUnifiedAddress({
     network,
-    p2pkhPubKeyHash: pkh,
     saplingRawReceiver,
     orchardRawReceiver,
   });
@@ -346,6 +377,7 @@ function deriveAccountFromSeed(seed, accountIndex = 0, network = "testnet") {
     publicKeyHex: bytesToHex(pubBytes),
     pubKeyHash: bytesToHex(pkh),
     scriptPubKeyHex: bytesToHex(pubKeyHashToScriptPubKey(pkh)),
+    privateKey: bytesToHex(privKey),
     privateKeyHex: bytesToHex(privKey),
   };
 }

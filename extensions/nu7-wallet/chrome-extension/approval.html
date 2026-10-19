@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VeilX — Authorization Request</title>
+  <style>
+    :root {
+      --bg: #090a0f;
+      --surface: #12141c;
+      --surface-2: #181b26;
+      --border: #232738;
+      --border-hover: #373e56;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --subtle: #64748b;
+      --gold: #f59e0b;
+      --emerald: #10b981;
+      --emerald-subtle: rgba(16, 185, 129, 0.12);
+      --danger: #ef4444;
+      --danger-subtle: rgba(239, 68, 68, 0.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 100%;
+      height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      letter-spacing: -0.01em;
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .logo-img {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      object-fit: contain;
+    }
+    .header-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .header-sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .origin-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .origin-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--surface-2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--gold);
+      font-size: 14px;
+      font-weight: bold;
+    }
+    .origin-meta {
+      flex: 1;
+      overflow: hidden;
+    }
+    .origin-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--subtle);
+      font-weight: 600;
+    }
+    .origin-url {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .content-box {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .req-type-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 10px;
+      align-self: flex-start;
+    }
+    .badge-connect { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+    .badge-send { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-sign { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .detail-row {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 12px;
+    }
+    .detail-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: var(--subtle);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .detail-value {
+      font-size: 12px;
+      font-weight: 500;
+      word-break: break-all;
+      background: #090a0f;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .amount-highlight {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--gold);
+    }
+    .security-notice {
+      background: var(--danger-subtle);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #f87171;
+      line-height: 1.4;
+      margin-top: auto;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    button {
+      flex: 1;
+      padding: 11px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-reject {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .btn-reject:hover {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #f87171;
+    }
+    .btn-approve {
+      background: var(--gold);
+      border: 1px solid var(--gold);
+      color: #090a0f;
+    }
+    .btn-approve:hover {
+      background: #fbbf24;
+      border-color: #fbbf24;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="VeilX_logo.png" alt="VeilX" class="logo-img" />
+    <div>
+      <div class="header-title">VeilX Security Authorization</div>
+      <div class="header-sub" id="netLabel">Zcash Testnet</div>
+    </div>
+  </div>
+
+  <div class="origin-card">
+    <div class="origin-icon">🌐</div>
+    <div class="origin-meta">
+      <div class="origin-label">Requesting Application</div>
+      <div class="origin-url" id="reqOrigin">loading...</div>
+    </div>
+  </div>
+
+  <div class="content-box" id="contentBox">
+    <div class="req-type-badge badge-send" id="reqBadge">Transaction Request</div>
+
+    <div id="dynamicDetails">
+      <!-- Populated dynamically by approval.js -->
+    </div>
+
+    <div class="security-notice" id="secNotice">
+      Verify the recipient address and amount carefully. Once confirmed and broadcasted, Zcash transactions cannot be reversed.
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn-reject" id="btnReject">Reject</button>
+    <button class="btn-approve" id="btnApprove">Approve</button>
+  </div>
+
+  <script src="approval.js"></script>
+</body>
+</html>

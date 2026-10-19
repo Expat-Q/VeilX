@@ -625,7 +625,7 @@ export function DashboardOverview({
                               : item.isIncoming
                               ? `Request from @${item.requesterHandle || "someone"}`
                               : `Request to @${item.targetHandle || "recipient"}`
-                            : item.status === "FULFILLED"
+                            : item.status === "FULFILLED" || item.status === "FORWARD_PENDING" || item.status === "SETTLING"
                             ? item.isIncoming
                               ? `You paid request from @${item.requesterHandle || "requester"}`
                               : `@${item.targetHandle || "recipient"} paid your request`

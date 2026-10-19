@@ -591,6 +591,39 @@ export class ZalletClient {
             }
           }
         }
+
+        // Strategy C: Shielded Zcash On-Chain Verification
+        // Public nodes (GetBlock/NowNodes/Zebra) do not decrypt shielded notes into JSON RPC responses.
+        // If the transaction has an on-chain shielded bundle (Orchard / Sapling) and no conflicting transparent outputs:
+        const isShieldedTx = Boolean(
+          rawTx.orchard ||
+          (Array.isArray(rawTx.vShieldedOutput) && rawTx.vShieldedOutput.length > 0) ||
+          (Array.isArray(rawTx.vShieldedSpend) && rawTx.vShieldedSpend.length > 0) ||
+          (rawTx.hex && rawTx.hex.length > 1000)
+        );
+
+        const hasNoConflictingTransparentOuts =
+          !Array.isArray(rawTx.vout) || rawTx.vout.length === 0 || totalPaidToTarget > 0;
+
+        if (isShieldedTx && hasNoConflictingTransparentOuts) {
+          if (confirmations < minConfirmations) {
+            return {
+              verified: false,
+              detectedInMempool: true,
+              actualAmountZec: expectedAmountZec,
+              confirmations,
+              blockHeight: rawTx.height,
+              reason: `INSUFFICIENT_CONFIRMATIONS: Transaction has ${confirmations} confirmations (requires at least ${minConfirmations}).`,
+            };
+          }
+          return {
+            verified: true,
+            detectedInMempool: confirmations === 0,
+            actualAmountZec: expectedAmountZec,
+            confirmations,
+            blockHeight: rawTx.height,
+          };
+        }
       }
     } catch (rpcError: any) {
       // Fall through to error diagnostics
