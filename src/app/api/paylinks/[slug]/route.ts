@@ -7,12 +7,26 @@ export async function GET(
   { params }: { params: { slug: string } }
 ) {
   try {
-    const paylink = await dbService.getPayLinkBySlug(params.slug);
+    let paylink = await dbService.getPayLinkBySlug(params.slug);
     if (!paylink) {
       return NextResponse.json(
         { success: false, error: "PayLink not found" },
         { status: 404 }
       );
+    }
+
+    // Lazy auto-reconciliation: if paylink is in SETTLING with paidTxid, check if block confirmed
+    if (paylink.status === "SETTLING" && paylink.paidTxid) {
+      try {
+        const settled = await dbService.settlePayLink({
+          slug: paylink.slug,
+          paidTxid: paylink.paidTxid,
+          payerUsername: paylink.creatorUsernameSnapshot,
+        });
+        if (settled) paylink = settled;
+      } catch {
+        // Still pending in mempool
+      }
     }
 
     const user = await getCurrentUser();

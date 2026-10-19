@@ -33,6 +33,7 @@ export interface ZalletReceivedNote {
 
 export interface VerificationResult {
   verified: boolean;
+  detectedInMempool?: boolean;
   reason?: string;
   actualAmountZec?: number;
   confirmations?: number;
@@ -472,15 +473,7 @@ export class ZalletClient {
       const rawTx = await this.call<any>("getrawtransaction", [txid.trim(), 1]);
       if (rawTx) {
         txFoundOnChain = true;
-        const confirmations = rawTx.confirmations || 0;
-        if (confirmations < minConfirmations) {
-          return {
-            verified: false,
-            reason: `INSUFFICIENT_CONFIRMATIONS: Transaction has ${confirmations} confirmations (requires at least ${minConfirmations}).`,
-            confirmations,
-          };
-        }
-
+        const confirmations = typeof rawTx.confirmations === "number" ? rawTx.confirmations : 0;
         // Check transparent outputs (vout)
         // If expectedAddress is a Unified Address, decode its embedded transparent receiver (t1... or tm...)
         const targetAddresses = new Set<string>([expectedAddress]);
@@ -516,8 +509,19 @@ export class ZalletClient {
         }
 
         if (totalPaidToTarget >= expectedAmountZec * 0.999) {
+          if (confirmations < minConfirmations) {
+            return {
+              verified: false,
+              detectedInMempool: true,
+              actualAmountZec: totalPaidToTarget,
+              confirmations,
+              blockHeight: rawTx.height,
+              reason: `INSUFFICIENT_CONFIRMATIONS: Transaction has ${confirmations} confirmations (requires at least ${minConfirmations}).`,
+            };
+          }
           return {
             verified: true,
+            detectedInMempool: confirmations === 0,
             actualAmountZec: totalPaidToTarget,
             confirmations,
             blockHeight: rawTx.height,
@@ -557,8 +561,20 @@ export class ZalletClient {
           if (totalShieldedZats > 0) {
             const paidZec = totalShieldedZats / 1e8;
             if (paidZec >= expectedAmountZec * 0.999) {
+              if (confirmations < minConfirmations) {
+                return {
+                  verified: false,
+                  detectedInMempool: true,
+                  actualAmountZec: paidZec,
+                  confirmations,
+                  blockHeight: rawTx.height,
+                  memo: lastDecryptedNote?.memo_text,
+                  reason: `INSUFFICIENT_CONFIRMATIONS: Transaction has ${confirmations} confirmations (requires at least ${minConfirmations}).`,
+                };
+              }
               return {
                 verified: true,
+                detectedInMempool: confirmations === 0,
                 actualAmountZec: paidZec,
                 confirmations,
                 blockHeight: rawTx.height,

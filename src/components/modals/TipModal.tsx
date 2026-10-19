@@ -101,6 +101,7 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
   const [isFundingTip, setIsFundingTip] = useState(false);
   const [confirmedTxid, setConfirmedTxid] = useState<string | null>(null);
   const [copiedTxid, setCopiedTxid] = useState(false);
+  const [fundingNotice, setFundingNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [recentAccounts, setRecentAccounts] = useState<SearchedAccount[]>([]);
 
@@ -434,8 +435,14 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
       const data = await res.json();
       if (res.ok && data.success) {
         setConfirmedTxid(txidToSubmit);
-        if (onSuccess) onSuccess(data.tip);
-        setStep(5);
+        if (data.tip?.status === "FUNDED") {
+          setFundingNotice(null);
+          if (onSuccess) onSuccess(data.tip);
+          setStep(5);
+        } else {
+          // Status is FUNDING_DETECTED (in mempool, awaiting block 1 confirmation)
+          setFundingNotice("Payment broadcasted & detected on blockchain! Confirming in next block...");
+        }
       } else {
         setErrorNotice(data.error || "Failed to confirm on-chain tip funding.");
       }
@@ -455,9 +462,12 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
         const data = await res.json();
         if (res.ok && data.success && data.tip) {
           if (data.tip.status === "FUNDED") {
+            setFundingNotice(null);
             setConfirmedTxid(data.tip.fundingTxid);
             if (onSuccess) onSuccess(data.tip);
             setStep(5);
+          } else if (data.tip.status === "FUNDING_DETECTED") {
+            setFundingNotice("Payment broadcasted & detected on blockchain! Confirming in next block...");
           }
         }
       } catch (e) {
@@ -611,6 +621,7 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
     setCreatedTipId(null);
     setFundingTxidInput("");
     setConfirmedTxid(null);
+    setFundingNotice(null);
     setErrorNotice(null);
     setEvmTxHashInput("");
     onClose();
@@ -1383,6 +1394,12 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
             /* PATH B: Native Zcash Shielded Payment */
             generatedEscrowAddress && (
               <div className="space-y-4">
+                {fundingNotice && (
+                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl flex items-center gap-2.5 text-xs text-amber-900 font-semibold animate-in fade-in">
+                    <Loader2 className="w-4 h-4 text-amber-700 animate-spin shrink-0" />
+                    <span>{fundingNotice}</span>
+                  </div>
+                )}
                 <QRDisplay
                   value={buildZip321Uri({
                     address: generatedEscrowAddress,

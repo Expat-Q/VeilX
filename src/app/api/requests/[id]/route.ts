@@ -7,12 +7,26 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const request = await dbService.getRequestById(params.id);
+    let request = await dbService.getRequestById(params.id);
     if (!request) {
       return NextResponse.json(
         { success: false, error: "Payment request not found" },
         { status: 404 }
       );
+    }
+
+    // Lazy auto-reconciliation: if request is in SETTLING with paidTxid, check if block confirmed
+    if (request.status === "SETTLING" && request.paidTxid) {
+      try {
+        const settled = await dbService.settleRequest({
+          id: (request._id || request.id).toString(),
+          paidTxid: request.paidTxid,
+          payerUsername: request.targetUsernameSnapshot,
+        });
+        if (settled) request = settled;
+      } catch {
+        // Still pending in mempool
+      }
     }
 
     const user = await getCurrentUser();

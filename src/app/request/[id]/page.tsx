@@ -28,6 +28,7 @@ export default function RequestDetailsPage() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isPaid, setIsPaid] = useState(false);
+  const [isSettling, setIsSettling] = useState(false);
   const [isCancelled, setIsCancelled] = useState(false);
   const [isDeclining, setIsDeclining] = useState(false);
   const [declineError, setDeclineError] = useState<string | null>(null);
@@ -61,8 +62,12 @@ export default function RequestDetailsPage() {
             setRequestData(data.request);
             if (data.request.status === "FULFILLED") {
               setIsPaid(true);
+              setIsSettling(false);
             } else if (data.request.status === "CANCELLED") {
               setIsCancelled(true);
+              setIsSettling(false);
+            } else if (data.request.status === "SETTLING") {
+              setIsSettling(true);
             }
           }
         })
@@ -72,7 +77,7 @@ export default function RequestDetailsPage() {
 
     fetchRequest();
 
-    // Poll every 4 seconds to auto-detect payment
+    // Poll every 4 seconds to auto-detect payment and block confirmation
     const interval = setInterval(() => {
       if (!isPaid && !isCancelled) {
         fetchRequest();
@@ -92,6 +97,7 @@ export default function RequestDetailsPage() {
       const data = await res.json();
       if (res.ok && data.success) {
         setIsCancelled(true);
+        setIsSettling(false);
       } else {
         setDeclineError(data.error || "Failed to decline request. (You must be the recipient or creator)");
       }
@@ -116,7 +122,12 @@ export default function RequestDetailsPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setIsPaid(true);
+        if (data.request?.status === "FULFILLED") {
+          setIsPaid(true);
+          setIsSettling(false);
+        } else {
+          setIsSettling(true);
+        }
       } else {
         setManualError(data.error || "Failed to verify transaction. Please ensure the transaction has mined.");
       }
@@ -240,6 +251,18 @@ export default function RequestDetailsPage() {
               </div>
             )}
 
+            {isSettling && (
+              <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl flex items-center gap-3 text-xs text-amber-900 font-semibold shadow-subtle animate-in fade-in">
+                <Loader2 className="w-5 h-5 text-amber-700 animate-spin shrink-0" />
+                <div className="space-y-0.5">
+                  <p className="font-bold">Payment Broadcasted & Detected!</p>
+                  <p className="text-[11px] text-amber-700 font-normal">
+                    Confirming on Zcash blockchain and delivering directly to @{request.requesterUsernameSnapshot}...
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* QR Payment Handoff */}
             {(() => {
               const depositAddress = request.escrowDepositAddress;
@@ -263,7 +286,12 @@ export default function RequestDetailsPage() {
                       });
                       const data = await res.json().catch(() => ({}));
                       if (res.ok && data.success) {
-                        setIsPaid(true);
+                        if (data.request?.status === "FULFILLED") {
+                          setIsPaid(true);
+                          setIsSettling(false);
+                        } else {
+                          setIsSettling(true);
+                        }
                       } else {
                         setManualError(data.error || "Payment verification failed on server.");
                       }

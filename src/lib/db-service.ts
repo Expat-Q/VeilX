@@ -130,30 +130,33 @@ export const dbService = {
       throw new Error("DUPLICATE_TXID_REUSE: This transaction ID has already been used for settlement.");
     }
 
-    // 3. Server-side payment verification
+    // 3. Server-side payment verification (allow 0-conf mempool detection)
     const verification = await zallet.verifyPaymentTransaction({
       txid: cleanTxid,
       expectedAddress: tip.escrowAddress,
       expectedAmountZec: tip.amountZec,
-      minConfirmations: 1,
+      minConfirmations: 0,
     });
 
     if (!verification.verified) {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
 
+    const isMempool = verification.confirmations === 0 || verification.detectedInMempool === true;
+    const targetStatus = isMempool ? "FUNDING_DETECTED" : "FUNDED";
+
     const finalizedAmountZec = (verification.actualAmountZec && verification.actualAmountZec > 0)
       ? Math.min(tip.amountZec, verification.actualAmountZec)
       : tip.amountZec;
 
-    // 4. Update status to FUNDED
+    // 4. Update status to FUNDED (if confirmed) or FUNDING_DETECTED (if in mempool)
     try {
       await connectToDatabase();
       const updated = await Tip.findByIdAndUpdate(
         tipId,
         {
           $set: {
-            status: "FUNDED",
+            status: targetStatus,
             amountZec: finalizedAmountZec,
             amountZats: Math.round(finalizedAmountZec * 100000000),
             fundingTxid: cleanTxid,
@@ -180,7 +183,7 @@ export const dbService = {
 
     const inMem = memoryStore.tips.find((t) => t._id === tipId || t.id === tipId);
     if (inMem) {
-      inMem.status = "FUNDED";
+      inMem.status = targetStatus;
       inMem.amountZec = finalizedAmountZec;
       inMem.amountZats = Math.round(finalizedAmountZec * 100000000);
       inMem.fundingTxid = cleanTxid;
@@ -941,8 +944,8 @@ export const dbService = {
     // 1. Get request to check expected parameters
     const request = await this.getRequestById(id);
     if (!request) throw new Error("REQUEST_NOT_FOUND");
-    if (request.status === "FULFILLED" || request.status === "FORWARD_PENDING") return request; // Idempotent
-    if (request.status !== "PENDING") {
+    if (request.status === "FULFILLED" || request.forwardTxid) return request; // Idempotent
+    if (request.status !== "PENDING" && request.status !== "SETTLING") {
       throw new Error(`REQUEST_CANNOT_BE_SETTLED: Current status is '${request.status}'`);
     }
 
@@ -964,19 +967,21 @@ export const dbService = {
       throw new Error("INVALID_ESCROW_ADDRESS: Payment request does not have an escrow deposit address.");
     }
 
-    // 3. Server-Side On-Chain Verification
+    // 3. Server-Side On-Chain Verification (allow 0-conf mempool detection)
     const verification = await zallet.verifyPaymentTransaction({
       txid: cleanTxid,
       expectedAddress: request.escrowDepositAddress,
       expectedAmountZec: request.amountZec,
-      minConfirmations: 1,
+      minConfirmations: 0,
     });
 
     if (!verification.verified) {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
 
-    // 4. ATOMIC LOCK: Transition status from PENDING -> SETTLING before making payout
+    const isMempool = verification.confirmations === 0 || verification.detectedInMempool === true;
+
+    // 4. ATOMIC LOCK: Transition status to SETTLING with paidTxid
     let isMongo = false;
     try {
       await connectToDatabase();
@@ -990,8 +995,8 @@ export const dbService = {
     let lockedRequest: any;
     if (isMongo) {
       lockedRequest = await PaymentRequest.findOneAndUpdate(
-        { _id: id, status: "PENDING" },
-        { $set: { status: "SETTLING", paidTxid: cleanTxid, paidAt: new Date() } },
+        { _id: id, status: { $in: ["PENDING", "SETTLING"] } },
+        { $set: { status: "SETTLING", paidTxid: cleanTxid, paidAt: request.paidAt || new Date() } },
         { new: true }
       ).lean();
 
@@ -1000,20 +1005,28 @@ export const dbService = {
         if (existing?.status === "FULFILLED" || existing?.status === "FORWARD_PENDING") return existing;
         throw new Error("CONCURRENT_SETTLEMENT_CONFLICT: Request is currently being settled by another worker.");
       }
+      memoryStore.usedTxids.add(cleanTxid);
     } else {
       if (IS_PRODUCTION) {
         throw new Error("DATABASE_ERROR: Could not settle payment request in primary database.");
       }
       const inMem = memoryStore.requests.find((r) => r._id === id || r.id === id);
       if (!inMem) throw new Error("REQUEST_NOT_FOUND");
-      if (inMem.status !== "PENDING") {
+      if (inMem.status !== "PENDING" && inMem.status !== "SETTLING") {
         if (inMem.status === "FULFILLED" || inMem.status === "FORWARD_PENDING") return inMem;
         throw new Error("CONCURRENT_SETTLEMENT_CONFLICT");
       }
       inMem.status = "SETTLING";
       inMem.paidTxid = cleanTxid;
-      inMem.paidAt = new Date();
+      inMem.paidAt = inMem.paidAt || new Date();
       lockedRequest = inMem;
+      memoryStore.usedTxids.add(cleanTxid);
+    }
+
+    // If transaction has 0 confirmations (in mempool), stop here and return SETTLING status.
+    // The client or background worker will finalize to FULFILLED once block 1 is mined!
+    if (isMempool) {
+      return lockedRequest;
     }
 
     // 5. Calculate net payout based on min(nominal, actualReceived) to prevent underpayment deficit (HIGH-01)
@@ -1174,8 +1187,8 @@ export const dbService = {
     // 1. Get paylink
     const link = await this.getPayLinkBySlug(slug);
     if (!link) throw new Error("PAYLINK_NOT_FOUND");
-    if (link.status === "PAID" || link.status === "FORWARD_PENDING") return link; // Idempotent
-    if (link.status !== "UNPAID") {
+    if (link.status === "PAID" || link.forwardTxid) return link; // Idempotent
+    if (link.status !== "UNPAID" && link.status !== "SETTLING") {
       throw new Error(`PAYLINK_CANNOT_BE_SETTLED: Current status is '${link.status}'`);
     }
 
@@ -1189,19 +1202,21 @@ export const dbService = {
       throw new Error("INVALID_ESCROW_ADDRESS: Payment link does not have an escrow deposit address.");
     }
 
-    // 3. Server-Side On-Chain Verification
+    // 3. Server-Side On-Chain Verification (allow 0-conf mempool detection)
     const verification = await zallet.verifyPaymentTransaction({
       txid: cleanTxid,
       expectedAddress: link.escrowDepositAddress,
       expectedAmountZec: link.amountZec,
-      minConfirmations: 1,
+      minConfirmations: 0,
     });
 
     if (!verification.verified) {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
 
-    // 4. ATOMIC LOCK: Transition status from UNPAID -> SETTLING before making payout
+    const isMempool = verification.confirmations === 0 || verification.detectedInMempool === true;
+
+    // 4. ATOMIC LOCK: Transition status to SETTLING with paidTxid
     let isMongo = false;
     try {
       await connectToDatabase();
@@ -1215,8 +1230,8 @@ export const dbService = {
     let lockedLink: any;
     if (isMongo) {
       lockedLink = await PaymentLink.findOneAndUpdate(
-        { slug, status: "UNPAID" },
-        { $set: { status: "SETTLING", paidTxid: cleanTxid, paidAt: new Date() } },
+        { slug, status: { $in: ["UNPAID", "SETTLING"] } },
+        { $set: { status: "SETTLING", paidTxid: cleanTxid, paidAt: link.paidAt || new Date() } },
         { new: true }
       ).lean();
 
@@ -1225,20 +1240,28 @@ export const dbService = {
         if (existing?.status === "PAID" || existing?.status === "FORWARD_PENDING") return existing;
         throw new Error("CONCURRENT_SETTLEMENT_CONFLICT: PayLink is currently being settled by another worker.");
       }
+      memoryStore.usedTxids.add(cleanTxid);
     } else {
       if (IS_PRODUCTION) {
         throw new Error("DATABASE_ERROR: Could not settle PayLink invoice in primary database.");
       }
       const inMem = memoryStore.paylinks.find((l) => l.slug === slug);
       if (!inMem) throw new Error("PAYLINK_NOT_FOUND");
-      if (inMem.status !== "UNPAID") {
+      if (inMem.status !== "UNPAID" && inMem.status !== "SETTLING") {
         if (inMem.status === "PAID" || inMem.status === "FORWARD_PENDING") return inMem;
         throw new Error("CONCURRENT_SETTLEMENT_CONFLICT");
       }
       inMem.status = "SETTLING";
       inMem.paidTxid = cleanTxid;
-      inMem.paidAt = new Date();
+      inMem.paidAt = inMem.paidAt || new Date();
       lockedLink = inMem;
+      memoryStore.usedTxids.add(cleanTxid);
+    }
+
+    // If transaction has 0 confirmations (in mempool), stop here and return SETTLING status.
+    // The client or background worker will finalize to PAID once block 1 is mined!
+    if (isMempool) {
+      return lockedLink;
     }
 
     // 5. Calculate net funds from Escrow to creator's personal shielded address (deficit-protected)
@@ -1525,7 +1548,20 @@ export const dbService = {
       }
     }
 
-    // 2. Fresh payout attempt
+    // 2. If status is SETTLING, verify that the payer's transaction has at least 1 confirmation
+    if (link.status === "SETTLING" && link.paidTxid) {
+      const verification = await zallet.verifyPaymentTransaction({
+        txid: link.paidTxid,
+        expectedAddress: link.escrowDepositAddress,
+        expectedAmountZec: link.amountZec,
+        minConfirmations: 1,
+      });
+      if (!verification.verified || (verification.confirmations || 0) < 1) {
+        return { success: false, status: "SETTLING", message: "Transaction still in mempool awaiting block confirmation." };
+      }
+    }
+
+    // 3. Fresh payout attempt
     const MINING_FEE_ZEC = 0.0001;
     const netPayoutAmount = Math.max(0, Math.round((link.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
     checkPayoutCircuitBreaker();
@@ -1597,7 +1633,20 @@ export const dbService = {
       }
     }
 
-    // 2. Fresh payout attempt
+    // 2. If status is SETTLING, verify that the payer's transaction has at least 1 confirmation
+    if (request.status === "SETTLING" && request.paidTxid) {
+      const verification = await zallet.verifyPaymentTransaction({
+        txid: request.paidTxid,
+        expectedAddress: request.escrowDepositAddress,
+        expectedAmountZec: request.amountZec,
+        minConfirmations: 1,
+      });
+      if (!verification.verified || (verification.confirmations || 0) < 1) {
+        return { success: false, status: "SETTLING", message: "Transaction still in mempool awaiting block confirmation." };
+      }
+    }
+
+    // 3. Fresh payout attempt
     const MINING_FEE_ZEC = 0.0001;
     const netPayoutAmount = Math.max(0, Math.round((request.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
     checkPayoutCircuitBreaker();

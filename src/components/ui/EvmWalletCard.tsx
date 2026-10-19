@@ -71,7 +71,7 @@ export function EvmWalletCard({
     return () => {
       isMounted = false;
     };
-  }, [walletAddress, selectedToken.id]);
+  }, [walletAddress, selectedToken]);
 
   const handleConnect = async () => {
     setIsConnecting(true);

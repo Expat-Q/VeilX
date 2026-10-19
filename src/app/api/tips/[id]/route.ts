@@ -6,10 +6,24 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const tip = await dbService.getTipById(params.id);
+    let tip = await dbService.getTipById(params.id);
     if (!tip) {
       return NextResponse.json({ error: "Tip not found" }, { status: 404 });
     }
+
+    // Lazy auto-reconciliation: if tip is in FUNDING_DETECTED and has fundingTxid, check if block confirmed
+    if (tip.status === "FUNDING_DETECTED" && tip.fundingTxid) {
+      try {
+        const updated = await dbService.confirmTipFunding(
+          (tip._id || tip.id).toString(),
+          tip.fundingTxid
+        );
+        if (updated) tip = updated;
+      } catch {
+        // Still pending in mempool
+      }
+    }
+
     return NextResponse.json({
       success: true,
       tip: {
