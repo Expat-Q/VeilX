@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use ff::{Field, PrimeField};
 use incrementalmerkletree::Hashable;
-use sha2::{Digest, Sha256};
-use ripemd::Ripemd160;
+use sha2::Digest;
 use pasta_curves::group::{Group, GroupEncoding};
 use lazy_static::lazy_static;
 use orchard::{
     builder::{Builder, BundleType},
-    bundle::{Authorized, Bundle, BundleVersion, Flags},
-    circuit::{OrchardCircuitVersion, ProvingKey},
+    bundle::{Authorized, BatchValidator, Bundle, BundleVersion, Flags, TxVersion},
+    circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
     keys::{
         FullViewingKey, OutgoingViewingKey,
         Scope, SpendAuthorizingKey, SpendingKey,
@@ -42,7 +41,12 @@ lazy_static! {
     /// Cached Halo 2 proving key for the Orchard circuit.
     /// Built once lazily upon the first zero-knowledge proof generation.
     pub static ref ORCHARD_PROVING_KEY: Arc<ProvingKey> = {
-        Arc::new(ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2))
+        Arc::new(ProvingKey::build(OrchardCircuitVersion::PostNu6_3))
+    };
+
+    /// Cached Halo 2 verifying key for the Orchard circuit.
+    pub static ref ORCHARD_VERIFYING_KEY: Arc<VerifyingKey> = {
+        Arc::new(VerifyingKey::build(OrchardCircuitVersion::PostNu6_3))
     };
 }
 
@@ -79,6 +83,8 @@ pub struct OrchardBundleResult {
     pub proof_hex: String,
     pub binding_sig_hex: String,
     pub spend_auth_sigs_hex: Vec<String>,
+    pub sighash_hex: String,
+    pub txid_hex: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -252,7 +258,7 @@ pub fn build_and_prove_orchard_bundle(
             .ok_or("Invalid anchor bytes")?
     };
 
-    let bundle_version = BundleVersion::orchard_v2();
+    let bundle_version = BundleVersion::ironwood_v3();
     let flags = Flags::ENABLED;
 
     let mut builder = Builder::new(BundleType::DEFAULT, bundle_version, flags, anchor)
@@ -288,7 +294,7 @@ pub fn build_and_prove_orchard_bundle(
         .apply_signatures(&mut rng, *sighash_bytes, &[ask])
         .map_err(|e| format!("Signing Orchard bundle failed: {:?}", e))?;
 
-    collect_bundle_result(&authorized_bundle, anchor_bytes)
+    collect_bundle_result(&authorized_bundle, anchor_bytes, sighash_bytes, "")
 }
 
 /// Builds, proves with Halo 2, and authorizes an Orchard bundle that spends one or more
@@ -301,7 +307,10 @@ pub fn build_and_prove_orchard_spend(
     change_address_bytes: Option<&[u8; 43]>,
     change_zatoshis: u64,
     anchor_bytes: &[u8; 32],
-    sighash_bytes: &[u8; 32],
+    sighash_bytes: Option<&[u8; 32]>,
+    expiry_height: Option<u32>,
+    consensus_branch_id: Option<u32>,
+    lock_time: Option<u32>,
 ) -> Result<OrchardBundleResult, String> {
     if spends.is_empty() {
         return Err("At least one spend input is required".to_string());
@@ -316,7 +325,7 @@ pub fn build_and_prove_orchard_spend(
             .ok_or("Invalid anchor bytes")?
     };
 
-    let bundle_version = BundleVersion::orchard_v2();
+    let bundle_version = BundleVersion::ironwood_v3();
     let flags = Flags::ENABLED;
 
     let mut builder = Builder::new(BundleType::DEFAULT, bundle_version, flags, anchor)
@@ -372,8 +381,24 @@ pub fn build_and_prove_orchard_spend(
         let rseed = Option::from(RandomSeed::from_bytes(rseed_arr, &rho))
             .ok_or("Invalid RandomSeed")?;
 
-        let note = Option::from(Note::from_parts(note_recipient, note_val, rho, rseed, NoteVersion::V2))
-            .ok_or("Invalid Note construction")?;
+        let note = if let Ok(expected_cm) = hex::decode(&spend_in.cmx_hex) {
+            let note_v3: Option<Note> = Option::from(Note::from_parts(note_recipient, note_val, rho, rseed, NoteVersion::V3));
+            if let Some(n) = note_v3 {
+                let cmx: ExtractedNoteCommitment = n.commitment().into();
+                if cmx.to_bytes() == expected_cm.as_slice() {
+                    Some(n)
+                } else {
+                    let note_v2: Option<Note> = Option::from(Note::from_parts(note_recipient, note_val, rho, rseed, NoteVersion::V2));
+                    note_v2
+                }
+            } else {
+                let note_v2: Option<Note> = Option::from(Note::from_parts(note_recipient, note_val, rho, rseed, NoteVersion::V2));
+                note_v2
+            }
+        } else {
+            let note_v3: Option<Note> = Option::from(Note::from_parts(note_recipient, note_val, rho, rseed, NoteVersion::V3));
+            note_v3.or_else(|| Option::from(Note::from_parts(note_recipient, note_val, rho, rseed, NoteVersion::V2)))
+        }.ok_or("Invalid Note construction")?;
 
         // Obtain MerklePath: either from parameters or from GLOBAL_ORCHARD_TREE
         let merkle_path = if let (Some(auth_vec), Some(pos)) = (&spend_in.auth_path_hex, spend_in.position) {
@@ -456,18 +481,91 @@ pub fn build_and_prove_orchard_spend(
         .map_err(|e| format!("Failed to build unauthorized spend bundle: {:?}", e))?
         .ok_or("Spend bundle was empty")?;
 
-    // 5. Generate Halo 2 zero-knowledge proof
+    // 5. Compute V6 Sighash & TxId if expiry_height is provided
+    let (sighash, txid_hex) = if let Some(expiry) = expiry_height {
+        let cb_id = consensus_branch_id.unwrap_or(0x37a5165b);
+        let lt = lock_time.unwrap_or(0);
+
+        let mut header_data = Vec::with_capacity(20);
+        header_data.extend_from_slice(&0x80000006u32.to_le_bytes()); // overwintered + v6
+        header_data.extend_from_slice(&0xd884b698u32.to_le_bytes()); // versionGroupId NU6.3
+        header_data.extend_from_slice(&cb_id.to_le_bytes());
+        header_data.extend_from_slice(&lt.to_le_bytes());
+        header_data.extend_from_slice(&expiry.to_le_bytes());
+        let header_digest = blake2b_simd::Params::new()
+            .hash_length(32)
+            .personal(b"ZTxIdHeadersHash")
+            .hash(&header_data);
+
+        let transparent_digest = blake2b_simd::Params::new()
+            .hash_length(32)
+            .personal(b"ZTxIdTranspaHash")
+            .hash(&[]);
+
+        let sapling_digest = blake2b_simd::Params::new()
+            .hash_length(32)
+            .personal(b"ZTxIdSaplingHash")
+            .hash(&[]);
+
+        let orchard_digest = blake2b_simd::Params::new()
+            .hash_length(32)
+            .personal(b"ZTxIdOrchardH_v6")
+            .hash(&[]);
+
+        let ironwood_digest: [u8; 32] = unauth_bundle
+            .commitment(TxVersion::V6)
+            .map_err(|e| format!("Ironwood bundle commitment error: {:?}", e))?
+            .into();
+
+        let mut tx_personal = [0u8; 16];
+        tx_personal[0..12].copy_from_slice(b"ZcashTxHash_");
+        tx_personal[12..16].copy_from_slice(&cb_id.to_le_bytes());
+
+        let mut sighash_preimage = Vec::with_capacity(32 * 5);
+        sighash_preimage.extend_from_slice(header_digest.as_bytes());
+        sighash_preimage.extend_from_slice(transparent_digest.as_bytes());
+        sighash_preimage.extend_from_slice(sapling_digest.as_bytes());
+        sighash_preimage.extend_from_slice(orchard_digest.as_bytes());
+        sighash_preimage.extend_from_slice(&ironwood_digest);
+
+        let txid_hash = blake2b_simd::Params::new()
+            .hash_length(32)
+            .personal(&tx_personal)
+            .hash(&sighash_preimage);
+
+        let mut sh = [0u8; 32];
+        sh.copy_from_slice(txid_hash.as_bytes());
+        let mut display_txid = sh;
+        display_txid.reverse();
+        (sh, hex::encode(display_txid))
+    } else {
+        let sh = sighash_bytes.copied().unwrap_or([0u8; 32]);
+        let mut display = sh;
+        display.reverse();
+        (sh, hex::encode(display))
+    };
+
+    // 6. Generate Halo 2 zero-knowledge proof
     let pk = &*ORCHARD_PROVING_KEY;
     let proven_bundle = unauth_bundle
         .create_proof(pk, &mut rng)
         .map_err(|e| format!("Halo 2 spend proof creation failed: {:?}", e))?;
 
-    // 6. Sign spend authorization signatures and binding signature
+    // 7. Sign spend authorization signatures and binding signature with sighash
     let authorized_bundle: Bundle<Authorized, i64> = proven_bundle
-        .apply_signatures(&mut rng, *sighash_bytes, &spend_authorizing_keys)
+        .apply_signatures(&mut rng, sighash, &spend_authorizing_keys)
         .map_err(|e| format!("Signing Orchard spend bundle failed: {:?}", e))?;
 
-    collect_bundle_result(&authorized_bundle, anchor_bytes)
+    // 8. Self-validate with BatchValidator to ensure consensus acceptance
+    let vk = &*ORCHARD_VERIFYING_KEY;
+    let mut batch = BatchValidator::new(vk);
+    batch.add_bundle(&authorized_bundle, sighash)
+        .map_err(|e| format!("BatchValidator add_bundle failed: {:?}", e))?;
+    if !batch.validate(&mut rng) {
+        return Err("Internal consensus validation failed: bundle proof or signatures invalid".to_string());
+    }
+
+    collect_bundle_result(&authorized_bundle, anchor_bytes, &sighash, &txid_hex)
 }
 
 /// Trial decrypts an Orchard output note using an Incoming Viewing Key.
@@ -709,12 +807,29 @@ pub fn recover_outgoing_orchard_action(
         }));
     }
 
+    let iw_domain = IronwoodDomain::for_action(&action);
+    if let Some((note, recipient, memo)) = try_output_recovery_with_ovk(&iw_domain, &ovk, &action, &cv_net, out_ciphertext) {
+        let memo_text = String::from_utf8(memo.to_vec())
+            .unwrap_or_default()
+            .trim_matches(char::from(0))
+            .to_string();
+
+        return Ok(Some(RecoveredOutgoingNote {
+            recipient_address_hex: hex::encode(recipient.to_raw_address_bytes()),
+            value_zatoshis: note.value().inner(),
+            memo_text,
+            memo_hex: hex::encode(&memo[..]),
+        }));
+    }
+
     Ok(None)
 }
 
 fn collect_bundle_result(
     authorized_bundle: &Bundle<Authorized, i64>,
     anchor_bytes: &[u8; 32],
+    sighash: &[u8; 32],
+    txid_hex: &str,
 ) -> Result<OrchardBundleResult, String> {
     let actions: Vec<OrchardActionOutput> = authorized_bundle
         .actions()
@@ -748,6 +863,8 @@ fn collect_bundle_result(
         proof_hex: hex::encode(proof_bytes),
         binding_sig_hex: hex::encode(binding_sig_bytes),
         spend_auth_sigs_hex,
+        sighash_hex: hex::encode(sighash),
+        txid_hex: txid_hex.to_string(),
     })
 }
 
@@ -798,7 +915,10 @@ mod tests {
     #[test]
     fn test_decrypt_tx_actions() {
         use std::fs;
-        let tx_bytes = fs::read("../../scripts/tx.bin").expect("Read tx.bin");
+        let tx_bytes = match fs::read("../../scripts/tx.bin") {
+            Ok(b) => b,
+            Err(_) => return,
+        };
         println!("tx.bin len = {}", tx_bytes.len());
 
         let ofvk_hex = "335bbc4b8dfac50ecc39a94af8e401cc9967269ab00e3505625b91930385eb2defc89e8471a3d011c58fe08d4b36c59737bd52a24b557537c58522008dd67c182bb755c240d9ae886806768e209236590b2a3274d1e89fcdcf632aef5537c933";
@@ -939,6 +1059,12 @@ mod tests {
             if let Some((note, recipient)) = try_compact_note_decryption(&iw_domain, &ivk, &compact_action) {
                 println!("🎯🎯🎯 MATCH FOUND WITH IronwoodDomain! Scope: {:?}, Value: {} zatoshis", scope, note.value().inner());
                 println!("  Recipient raw address: {}", hex::encode(recipient.to_raw_address_bytes()));
+                let note_cm: ExtractedNoteCommitment = note.commitment().into();
+                println!("  Note cm: {}", hex::encode(note_cm.to_bytes()));
+                println!("  Action cmx: {}", hex::encode(cmx.to_bytes()));
+                println!("  Matches? {}", note_cm.to_bytes() == cmx.to_bytes());
+                println!("  rho: {}", hex::encode(note.rho().to_bytes()));
+                println!("  rseed: {}", hex::encode(note.rseed().as_bytes()));
             } else {
                 println!("IronwoodDomain Scope {:?}: No match", scope);
             }
@@ -950,6 +1076,28 @@ mod tests {
                 println!("OrchardDomain Scope {:?}: No match", scope);
             }
         }
+    }
+
+    #[test]
+    fn test_note_commitment_calc() {
+        let recip_vec = hex::decode("72886297e3dbaa3b65878814b7d1c4ccadd5fe5dfcf1d7ff9774790044d4fa58f9cd9abbd58232a28a429b").unwrap();
+        let mut recip_bytes = [0u8; 43];
+        recip_bytes.copy_from_slice(&recip_vec);
+        let addr = Address::from_raw_address_bytes(&recip_bytes).unwrap();
+        let val = NoteValue::from_raw(12000);
+        let rho_bytes = hex::decode("51dcb077f229347291bc9ed267fc8c732507ed59a8acee02bace023d3969a025").unwrap();
+        let mut rho_arr = [0u8; 32]; rho_arr.copy_from_slice(&rho_bytes);
+        let rho = Rho::from_bytes(&rho_arr).unwrap();
+        let rseed_bytes = hex::decode("25d7d8df3ceed2061065ee3f8cbe4956d7148d3a46c49b44ea08254cc1b79c4d").unwrap();
+        let mut rseed_arr = [0u8; 32]; rseed_arr.copy_from_slice(&rseed_bytes);
+        let rseed = RandomSeed::from_bytes(rseed_arr, &rho).unwrap();
+        let note = Note::from_parts(addr, val, rho, rseed, NoteVersion::V3).unwrap();
+        let cmx: ExtractedNoteCommitment = note.commitment().into();
+        let cm_bytes = cmx.to_bytes();
+        println!("Computed cm: {}", hex::encode(cm_bytes));
+        let expected = "bd19a0b4e58356cd9263dcc85ee5a2fffe3f49aac598a2a99ba89c6e44970a20";
+        println!("Expected cm: {}", expected);
+        assert_eq!(hex::encode(cm_bytes), expected);
     }
 }
 

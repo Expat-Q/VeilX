@@ -428,7 +428,16 @@ export class ZalletClient {
   async sendShieldedPayout(
     recipientAddress: string,
     amountZec: number,
-    memo?: string
+    memo?: string,
+    escrowNote?: {
+      txid?: string;
+      cmx: string;
+      valueZat: bigint;
+      rho: string;
+      rseed: string;
+      recipientRawAddress: string;
+      blockHeight?: number;
+    }
   ): Promise<{ opid?: string; txid?: string; isAsync: boolean }> {
     checkPayoutCircuitBreaker();
 
@@ -547,7 +556,98 @@ export class ZalletClient {
         }
 
         // B. Shielded Escrow Vault Disbursement
-        if (escrowSpendingKey) {
+        if (escrowSpendingKey && escrowNote) {
+          const blockchainInfo = await this.getBlockchainInfo().catch(() => ({ blocks: 3523120 }));
+          const currentHeight = blockchainInfo.blocks;
+          const expiryHeight = currentHeight + 20;
+
+          // Sync tree state before note's block
+          const noteHeight = escrowNote.blockHeight || (currentHeight - 1);
+          const prevHeight = noteHeight - 1;
+          const tsData = await this.call<any>("z_gettreestate", [String(prevHeight)]);
+          const stateHex = tsData?.ironwood?.commitments?.finalState || tsData?.orchard?.commitments?.finalState;
+
+          if (stateHex) {
+            const buf = Buffer.from(stateHex, "hex");
+            let offset = 0;
+            const hasLeft = buf[offset++] === 1;
+            const left = hasLeft ? buf.subarray(offset, offset + 32).toString("hex") : null;
+            if (hasLeft) offset += 32;
+            const hasRight = buf[offset++] === 1;
+            const right = hasRight ? buf.subarray(offset, offset + 32).toString("hex") : null;
+            if (hasRight) offset += 32;
+            const parentsLen = buf[offset++];
+            const parents: (string | null)[] = [];
+            for (let i = 0; i < parentsLen; i++) {
+              const hasP = buf[offset++] === 1;
+              if (hasP) {
+                parents.push(buf.subarray(offset, offset + 32).toString("hex"));
+                offset += 32;
+              } else {
+                parents.push(null);
+              }
+            }
+
+            wasm.tree_import_state({
+              tree: { left, right, parents },
+              witnesses: {},
+              checkpoints: [],
+            });
+
+            wasm.tree_append_commitments([escrowNote.cmx]);
+            wasm.tree_track_note(escrowNote.cmx);
+
+            const blockAnchor = wasm.tree_get_anchor();
+
+            const spendBundle = wasm.build_and_prove_orchard_spend({
+              spends: [
+                {
+                  spending_key_hex: escrowSpendingKey,
+                  recipient_raw_address_hex: escrowNote.recipientRawAddress,
+                  value_zatoshis: escrowNote.valueZat,
+                  rho_hex: escrowNote.rho,
+                  rseed_hex: escrowNote.rseed,
+                  cmx_hex: escrowNote.cmx,
+                  auth_path_hex: null,
+                  position: null,
+                },
+              ],
+              recipient_address: recipientAddress,
+              amount_zatoshis: amountZats,
+              memo: memo || "VeilX Escrow Payout",
+              change_address: null,
+              change_zatoshis: 0n,
+              anchor_hex: blockAnchor,
+              expiry_height: expiryHeight,
+              consensus_branch_id: 0x37a5165b,
+              lock_time: 0,
+            });
+
+            const rawTxHex = serializeV6ShieldedTransaction({
+              consensusBranchId: 0x37a5165b,
+              expiryHeight,
+              lockTime: 0,
+              actions: spendBundle.actions,
+              flags: 7,
+              valueBalanceZat: spendBundle.value_balance_zatoshis,
+              anchorHex: blockAnchor,
+              proofHex: spendBundle.proof_hex,
+              spendAuthSigsHex: spendBundle.spend_auth_sigs_hex,
+              bindingSigHex: spendBundle.binding_sig_hex,
+            });
+
+            const broadcastTxid = await this.call<string>("sendrawtransaction", [rawTxHex]);
+            if (broadcastTxid && typeof broadcastTxid === "string" && broadcastTxid.length === 64) {
+              console.log(`[Escrow Shielded Outflow] ✓ Transaction broadcasted on Zcash network: ${broadcastTxid}`);
+              return {
+                txid: broadcastTxid,
+                isAsync: false,
+              };
+            }
+          }
+        }
+
+        if (escrowSpendingKey && !escrowNote) {
           throw new Error(
             "SHIELDED_ESCROW_CONFIRMING: Escrow funds are held in the shielded vault. Awaiting note commitment witness synchronization before autonomous disbursement."
           );

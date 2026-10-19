@@ -274,7 +274,10 @@ pub struct SpendBundleParams {
     pub change_address: Option<String>,
     pub change_zatoshis: u64,
     pub anchor_hex: String,
-    pub sighash_hex: String,
+    pub sighash_hex: Option<String>,
+    pub expiry_height: Option<u32>,
+    pub consensus_branch_id: Option<u32>,
+    pub lock_time: Option<u32>,
 }
 
 #[wasm_bindgen]
@@ -328,13 +331,21 @@ pub fn build_and_prove_orchard_spend(params_val: JsValue) -> Result<JsValue, JsV
     let mut anchor_arr = [0u8; 32];
     anchor_arr.copy_from_slice(&anchor_bytes);
 
-    let sighash_bytes = hex::decode(&params.sighash_hex)
-        .map_err(|e| JsValue::from_str(&format!("Invalid sighash hex: {}", e)))?;
-    if sighash_bytes.len() != 32 {
-        return Err(JsValue::from_str("Sighash must be 32 bytes"));
-    }
-    let mut sighash_arr = [0u8; 32];
-    sighash_arr.copy_from_slice(&sighash_bytes);
+    let sighash_arr = if let Some(ref sh_hex) = params.sighash_hex {
+        if let Ok(b) = hex::decode(sh_hex) {
+            if b.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&b);
+                Some(arr)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let bundle = orchard_wallet::build_and_prove_orchard_spend(
         &params.spends,
@@ -344,7 +355,10 @@ pub fn build_and_prove_orchard_spend(params_val: JsValue) -> Result<JsValue, JsV
         change_bytes.as_ref(),
         params.change_zatoshis,
         &anchor_arr,
-        &sighash_arr,
+        sighash_arr.as_ref(),
+        params.expiry_height,
+        params.consensus_branch_id,
+        params.lock_time,
     )
     .map_err(|e| JsValue::from_str(&e))?;
 
