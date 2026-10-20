@@ -20,8 +20,17 @@ const nextConfig = {
     ],
   },
   async rewrites() {
-    const backendUrl = process.env.RENDER_BACKEND_URL;
-    if (!backendUrl) return [];
+    // 1. If running on Render itself, do NOT rewrite (prevents proxying to self in an infinite loop)
+    if (process.env.RENDER === "true" || process.env.IS_RENDER === "true") {
+      return [];
+    }
+
+    const rawBackendUrl = process.env.RENDER_BACKEND_URL;
+    if (!rawBackendUrl || !rawBackendUrl.trim()) return [];
+
+    // 2. Strip trailing slashes to prevent double slash (//api) 308 redirect loops
+    const backendUrl = rawBackendUrl.trim().replace(/\/+$/, "");
+
     return [
       {
         source: '/api/cron/:path*',

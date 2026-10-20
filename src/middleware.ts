@@ -44,7 +44,14 @@ export function middleware(request: NextRequest) {
       if (sourceHeader) {
         try {
           const sourceUrl = new URL(sourceHeader);
-          if (host && sourceUrl.host !== host) {
+          const isAllowedCrossHost =
+            sourceUrl.host === host ||
+            (sourceUrl.host.includes("vercel.app") && host.includes("onrender.com")) ||
+            (sourceUrl.host.includes("onrender.com") && host.includes("vercel.app")) ||
+            sourceUrl.host.includes("veilx.cash") ||
+            host.includes("veilx.cash");
+
+          if (host && !isAllowedCrossHost) {
             return new NextResponse(
               JSON.stringify({ error: "CSRF_FORBIDDEN: Cross-origin state mutating request blocked." }),
               { status: 403, headers: { "Content-Type": "application/json" } }
