@@ -3,6 +3,8 @@ import { dbService } from "@/lib/db-service";
 import { getCurrentUser } from "@/lib/auth";
 import { validateZcashAddress, ZCASH_NETWORK } from "@/lib/zcash";
 
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   try {
     // 1. Enforce Authenticated 𝕏 Session

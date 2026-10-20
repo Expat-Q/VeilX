@@ -3,6 +3,8 @@ import { dbService } from "@/lib/db-service";
 import { getCurrentUser } from "@/lib/auth";
 import { validateZcashAddress, ZCASH_NETWORK } from "@/lib/zcash";
 
+export const maxDuration = 60; // 60 seconds for zero-knowledge proof generation and on-chain broadcast
+
 export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }

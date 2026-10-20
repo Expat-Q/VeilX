@@ -69,12 +69,12 @@ export const dbService = {
       await connectToDatabase();
 
       // Auto-heal stale unbroadcasted claims older than 5 mins
-      const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const staleThreshold = new Date(Date.now() - 90 * 1000);
       await Tip.updateMany(
         {
           status: { $in: ["CLAIMING", "PENDING_VERIFICATION"] },
           payoutOpid: { $exists: false },
-          payoutSubmittedAt: { $lt: fiveMinsAgo },
+          payoutSubmittedAt: { $lt: staleThreshold },
         },
         {
           $set: { status: "FUNDED", claimLockId: undefined, payoutError: undefined },
@@ -339,7 +339,7 @@ export const dbService = {
       }
 
       if (tip.status === "CLAIMING" || tip.status === "PENDING_VERIFICATION") {
-        const CLAIM_GRACE_PERIOD_MS = 5 * 60 * 1000;
+        const CLAIM_GRACE_PERIOD_MS = 90 * 1000;
         const lockedAt = tip.payoutSubmittedAt
           ? new Date(tip.payoutSubmittedAt).getTime()
           : (tip.updatedAt ? new Date(tip.updatedAt).getTime() : 0);
@@ -807,7 +807,7 @@ export const dbService = {
       }
     } else {
       // If no payoutOpid was recorded yet, check if claim is still in-flight within proof generation grace period (5 mins)
-      const CLAIM_GRACE_PERIOD_MS = 5 * 60 * 1000;
+      const CLAIM_GRACE_PERIOD_MS = 90 * 1000;
       const lockedAt = tip.payoutSubmittedAt
         ? new Date(tip.payoutSubmittedAt).getTime()
         : (tip.updatedAt ? new Date(tip.updatedAt).getTime() : 0);

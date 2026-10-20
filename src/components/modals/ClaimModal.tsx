@@ -135,7 +135,16 @@ export function ClaimModal({
             recipientShieldedAddress: recipientAddress.trim(),
           }),
         });
-        const data = await res.json();
+        let data: any = {};
+        try {
+          data = await res.json();
+        } catch {
+          data = {
+            error: res.status === 502 || res.status === 504
+              ? "Zero-knowledge proof generation timed out at gateway. Escrow disbursement is processing in the background."
+              : `Service response error (${res.status}). Please retry shortly.`,
+          };
+        }
         if (res.ok && data.success) {
           if (data.status === "PENDING_VERIFICATION") {
             setIsPendingVerification(true);
@@ -156,7 +165,16 @@ export function ClaimModal({
             recipientShieldedAddress: recipientAddress.trim(),
           }),
         });
-        const data = await res.json();
+        let data: any = {};
+        try {
+          data = await res.json();
+        } catch {
+          data = {
+            error: res.status === 502 || res.status === 504
+              ? "Zero-knowledge proof generation timed out at gateway. Escrow disbursement is processing in the background."
+              : `Service response error (${res.status}). Please retry shortly.`,
+          };
+        }
         if (res.ok && data.success) {
           if (data.status === "PENDING_VERIFICATION") {
             setIsPendingVerification(true);

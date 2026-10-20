@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { dbService } from "@/lib/db-service";
 
+export const maxDuration = 60;
+
 function safeCompare(a: string, b: string): boolean {
   try {
     const bufA = Buffer.from(a);
