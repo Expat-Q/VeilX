@@ -1,7 +1,7 @@
 //! Zcash ZIP-225 Version 5 Transaction Construction & ZIP-244 Sighash
 
 use blake2b_simd::Params as Blake2bParams;
-use k256::ecdsa::{signature::Signer, Signature, SigningKey};
+use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -189,10 +189,10 @@ pub fn build_and_sign_v5_transaction(
     trans_data.extend_from_slice(&prevouts_digest);
     trans_data.extend_from_slice(&sequences_digest);
     trans_data.extend_from_slice(&outputs_digest);
-    let transparent_digest = blake2b_personal(b"ZTxIdTransprHash", &trans_data);
+    let transparent_digest = blake2b_personal(b"ZTxIdTranspaHash", &trans_data);
 
-    let sapling_digest = [0u8; 32];
-    let orchard_digest = [0u8; 32];
+    let sapling_digest = blake2b_personal(b"ZTxIdSaplingHash", &[]);
+    let orchard_digest = blake2b_personal(b"ZTxIdOrchardHash", &[]);
 
     // 4. Compute TxID
     let mut tx_personal = [0u8; 16];
@@ -260,7 +260,7 @@ pub fn build_and_sign_v5_transaction(
         let sighash = blake2b_personal(&tx_personal, &sighash_preimage);
 
         // Sign sighash with secp256k1
-        let signature: Signature = signing_key.sign(&sighash);
+        let signature: Signature = signing_key.sign_prehash(&sighash).map_err(|e| format!("ECDSA signing failed: {}", e))?;
         // Normalize to canonical low-S
         let low_s_sig = signature.normalize_s().unwrap_or(signature);
         let der = low_s_sig.to_der();
@@ -300,9 +300,10 @@ pub fn build_and_sign_v5_transaction(
     raw.extend_from_slice(&write_compact_size(output_count));
     raw.extend_from_slice(&outputs_data);
 
-    // Sapling bundle: 0x00
+    // Sapling bundle (ZIP-225: nSpendsSapling = 0, nOutputsSapling = 0)
     raw.push(0x00);
-    // Orchard bundle: 0x00
+    raw.push(0x00);
+    // Orchard bundle (ZIP-225: nActionsOrchard = 0)
     raw.push(0x00);
 
     Ok(SignedTransaction {
