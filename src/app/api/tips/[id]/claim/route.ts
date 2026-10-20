@@ -69,10 +69,29 @@ export async function POST(
       return NextResponse.json({ error: "Tip not found." }, { status: 404 });
     }
 
+    if (message.includes("SHIELDED_ESCROW_CONFIRMING") || message.includes("PAYOUT_DISPATCH_UNCERTAIN")) {
+      return NextResponse.json(
+        {
+          error: "Escrow funds are confirming on-chain. Please wait 1–2 minutes for the note witness to synchronize, then retry.",
+          retryable: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (message.includes("TIP_CLAIM_IN_PROGRESS")) {
+      return NextResponse.json(
+        {
+          error: "A claim for this tip is currently processing or confirming on-chain. Please check back shortly.",
+          retryable: true,
+        },
+        { status: 409 }
+      );
+    }
+
     if (
       message.includes("TIP_NOT_FUNDED") ||
       message.includes("TIP_ALREADY_CLAIMED") ||
-      message.includes("TIP_CLAIM_IN_PROGRESS") ||
       message.includes("INVALID_RECIPIENT_ADDRESS")
     ) {
       return NextResponse.json({ error: message }, { status: 400 });

@@ -92,7 +92,7 @@ async function main() {
       // Restore payout mock to success
       zallet.sendShieldedPayout = async () => ({
         txid: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        feeZec: 0.0001,
+        isAsync: false,
       });
 
       // Non-creator retry must fail with UNAUTHORIZED
@@ -105,8 +105,8 @@ async function main() {
 
       // Creator retry must succeed
       const retryRes = await dbService.retryForwardPayLink(paylink.slug, "creator_hybrid_2");
-      assert.strictEqual(retryRes.status, "PAID");
-      assert.strictEqual(retryRes.forwardTxid, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+      assert.strictEqual(retryRes?.status, "PAID");
+      assert.strictEqual(retryRes?.forwardTxid, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 
       const after = await dbService.getPayLinkBySlug(paylink.slug);
       assert.strictEqual(after?.status, "PAID");
@@ -144,7 +144,7 @@ async function main() {
       // Restore payout mock
       zallet.sendShieldedPayout = async () => ({
         txid: "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef",
-        feeZec: 0.0001,
+        isAsync: false,
       });
 
       // Unauthorized user rejected
@@ -157,8 +157,8 @@ async function main() {
 
       // Requester retries
       const retryRes = await dbService.retryForwardRequest(reqId, "requester_hybrid_3");
-      assert.strictEqual(retryRes.status, "FULFILLED");
-      assert.strictEqual(retryRes.forwardTxid, "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef");
+      assert.strictEqual(retryRes?.status, "FULFILLED");
+      assert.strictEqual(retryRes?.forwardTxid, "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef");
 
       const after = await dbService.getRequestById(reqId);
       assert.strictEqual(after?.status, "FULFILLED");
@@ -195,7 +195,7 @@ async function main() {
       // Step 2: Wallet recovers
       zallet.sendShieldedPayout = async () => ({
         txid: "9999999999999999999999999999999999999999999999999999999999999999",
-        feeZec: 0.0001,
+        isAsync: false,
       });
 
       // Step 3: Run the robot worker
@@ -233,7 +233,7 @@ async function main() {
 
       zallet.sendShieldedPayout = async (_addr, amount) => {
         payoutAmountCaptured = amount;
-        return { txid: "1111111111111111111111111111111111111111111111111111111111111111", feeZec: 0.0001 };
+        return { txid: "1111111111111111111111111111111111111111111111111111111111111111", isAsync: false };
       };
 
       await dbService.settlePayLink({

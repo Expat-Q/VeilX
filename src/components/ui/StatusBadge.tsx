@@ -1,14 +1,15 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 
-export type TipBadgeStatus = "PENDING" | "FUNDING_DETECTED" | "FUNDED" | "CLAIMING" | "CLAIMED" | "CANCELLED";
+export type TipBadgeStatus = "PENDING" | "FUNDING_DETECTED" | "FUNDED" | "CLAIMING" | "CLAIMED" | "CANCELLED" | "PENDING_VERIFICATION";
 
 export interface StatusBadgeProps {
   status: TipBadgeStatus | string;
   className?: string;
+  customLabel?: string;
 }
 
-export function StatusBadge({ status, className }: StatusBadgeProps) {
+export function StatusBadge({ status, className, customLabel }: StatusBadgeProps) {
   const normalized = (status ? String(status) : "PENDING").toUpperCase();
 
   const config: Record<string, { label: string; styles: string; dot: string }> = {
@@ -31,6 +32,11 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
       label: "Claiming...",
       styles: "bg-gold-50 text-gold-900 border-gold-200/80 animate-pulse",
       dot: "bg-gold-500",
+    },
+    PENDING_VERIFICATION: {
+      label: "Syncing Escrow...",
+      styles: "bg-amber-50 text-amber-900 border-amber-200/80 animate-pulse",
+      dot: "bg-amber-500",
     },
     CLAIMED: {
       label: "Claimed",
@@ -75,6 +81,8 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
     dot: "bg-brown-400",
   };
 
+  const displayLabel = customLabel || current.label;
+
   return (
     <span
       className={cn(
@@ -84,7 +92,7 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
       )}
     >
       <span className={cn("w-1.5 h-1.5 rounded-full", current.dot)} />
-      <span>{current.label}</span>
+      <span>{displayLabel}</span>
     </span>
   );
 }

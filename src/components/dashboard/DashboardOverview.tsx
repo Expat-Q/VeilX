@@ -293,8 +293,12 @@ export function DashboardOverview({
     return () => clearInterval(interval);
   }, [fetchLiveActivity]);
 
-  const pendingTips = activity.filter((a) => a.type === "received" && a.status === "FUNDED");
-  const pendingIncomingTotal = pendingTips.reduce(
+  const claimableTips = activity.filter((a) => a.type === "received" && a.status === "FUNDED");
+  const syncingTips = activity.filter(
+    (a) => a.type === "received" && (a.status === "CLAIMING" || a.status === "PENDING_VERIFICATION")
+  );
+  const pendingTips = claimableTips;
+  const pendingIncomingTotal = [...claimableTips, ...syncingTips].reduce(
     (acc, curr) => acc + (typeof curr.amountZec === "number" ? curr.amountZec : parseFloat(curr.amountZec) || 0),
     0
   );
@@ -310,10 +314,16 @@ export function DashboardOverview({
 
   const filteredActivity = activity.filter((item) => {
     if (activeFilter === "received") {
-      return item.type === "received" || (item.type === "request" && item.isIncoming);
+      // Inflow: funds received by user
+      return (
+        item.type === "received" ||
+        item.type === "paylink" ||
+        (item.type === "request" && !item.isIncoming)
+      );
     }
     if (activeFilter === "sent") {
-      return item.type === "sent" || (item.type === "request" && !item.isIncoming) || item.type === "paylink";
+      // Outflow: funds sent / paid out by user
+      return item.type === "sent" || (item.type === "request" && item.isIncoming);
     }
     return true;
   });
@@ -368,6 +378,11 @@ export function DashboardOverview({
           </p>
           <p className="text-xs font-medium text-brown-500">
             ≈ {formatZecToUsd(safePendingTotal)} USD
+            {syncingTips.length > 0 && claimableTips.length === 0 && (
+              <span className="block text-amber-600 font-semibold mt-1">
+                ({syncingTips.length} tip currently syncing escrow payout...)
+              </span>
+            )}
           </p>
         </div>
 
@@ -734,6 +749,18 @@ export function DashboardOverview({
                       >
                         Claim
                       </Button>
+                    ) : isReceivedTip && item.status === "PENDING_VERIFICATION" ? (
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          onClick={() => onOpenClaim(item)}
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200"
+                        >
+                          Retry Claim
+                        </Button>
+                        <StatusBadge status={item.status} />
+                      </div>
                     ) : item.type === "request" && item.status === "PENDING" ? (
                       item.isIncoming ? (
                         <div className="flex items-center gap-1.5">
@@ -821,7 +848,18 @@ export function DashboardOverview({
                         <StatusBadge status={item.status} />
                       </div>
                     ) : (
-                      <StatusBadge status={item.status} />
+                      <StatusBadge
+                        status={item.status}
+                        customLabel={
+                          item.type === "sent" && item.status === "FUNDED"
+                            ? "Delivered to Escrow"
+                            : item.type === "sent" && item.status === "CLAIMED"
+                            ? "Claimed by Recipient"
+                            : item.type === "sent" && item.status === "PENDING_VERIFICATION"
+                            ? "Claim in Progress"
+                            : undefined
+                        }
+                      />
                     )}
                   </div>
                 </div>

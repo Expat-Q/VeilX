@@ -26,9 +26,5 @@ export function truncateAddress(address: string, start = 10, end = 6): string {
 export function getZcashExplorerUrl(txid?: string | null, network = process.env.NEXT_PUBLIC_ZCASH_NETWORK || "mainnet"): string {
   if (!txid || !txid.trim()) return "#";
   const clean = txid.trim();
-  if (network === "mainnet") {
-    return `https://zcashblockexplorer.com/transactions/${clean}`;
-  }
-  return `https://testnet.zcashblockexplorer.com/transactions/${clean}`;
+  return `https://blockchair.com/zcash/transaction/${clean}`;
 }
-

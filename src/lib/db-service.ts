@@ -67,6 +67,20 @@ export const dbService = {
   async getTips(username?: string, userId?: string, includeUnfunded = false) {
     try {
       await connectToDatabase();
+
+      // Auto-heal stale unbroadcasted claims older than 5 mins
+      const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
+      await Tip.updateMany(
+        {
+          status: { $in: ["CLAIMING", "PENDING_VERIFICATION"] },
+          payoutOpid: { $exists: false },
+          payoutSubmittedAt: { $lt: fiveMinsAgo },
+        },
+        {
+          $set: { status: "FUNDED", claimLockId: undefined, payoutError: undefined },
+        }
+      ).catch(() => {});
+
       const filter: any = {};
       if (!includeUnfunded) {
         filter.status = { $in: ["FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"] };
@@ -300,7 +314,7 @@ export const dbService = {
     }
 
     if (isMongo) {
-      const tip = await Tip.findById(tipId);
+      let tip = await Tip.findById(tipId);
       if (!tip) {
         throw new Error("TIP_NOT_FOUND: The requested tip does not exist.");
       }
@@ -325,7 +339,22 @@ export const dbService = {
       }
 
       if (tip.status === "CLAIMING" || tip.status === "PENDING_VERIFICATION") {
-        throw new Error("TIP_CLAIM_IN_PROGRESS: A claim for this tip is currently being processed or pending verification.");
+        const CLAIM_GRACE_PERIOD_MS = 5 * 60 * 1000;
+        const lockedAt = tip.payoutSubmittedAt
+          ? new Date(tip.payoutSubmittedAt).getTime()
+          : (tip.updatedAt ? new Date(tip.updatedAt).getTime() : 0);
+        const isStale = !tip.payoutOpid && (Date.now() - lockedAt > CLAIM_GRACE_PERIOD_MS);
+
+        if (isStale) {
+          const healed = await Tip.findByIdAndUpdate(
+            tipId,
+            { $set: { status: "FUNDED", claimLockId: undefined, payoutError: undefined } },
+            { new: true }
+          );
+          if (healed) tip = healed;
+        } else {
+          throw new Error("TIP_CLAIM_IN_PROGRESS: A claim for this tip is currently being processed or pending verification.");
+        }
       }
 
       if (tip.status !== "FUNDED") {
@@ -406,7 +435,9 @@ export const dbService = {
       const payoutResult = await zallet.sendShieldedPayout(
         recipientShieldedAddress,
         netPayoutZec,
-        tipDoc.memo || "VeilX Shielded Claim"
+        tipDoc.memo || "VeilX Shielded Claim",
+        undefined,
+        tipDoc.fundingTxid
       );
 
       if (payoutResult.isAsync && payoutResult.opid) {
@@ -604,10 +635,13 @@ export const dbService = {
     // 3. Dispatch Single Shielded Payout from Escrow Pool
     try {
       const memo = `VeilX Shielded Batch Claim (${targetTips.length} tips)`;
+      const primaryFundingTxid = targetTips.find((t) => t.fundingTxid && !t.fundingTxid.startsWith("sim_tx_"))?.fundingTxid || targetTips[0]?.fundingTxid;
       const payoutResult = await zallet.sendShieldedPayout(
         recipientShieldedAddress,
         netBatchTotalZec,
-        memo
+        memo,
+        undefined,
+        primaryFundingTxid
       );
 
       if (payoutResult.isAsync && payoutResult.opid) {
