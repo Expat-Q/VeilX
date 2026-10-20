@@ -327,7 +327,7 @@ export function ClaimModal({
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-brown-900">
-                  Your Zcash Payout Address
+                  Your Zcash Transparent Address (t1...)
                 </label>
                 <button
                   type="button"
@@ -355,7 +355,7 @@ export function ClaimModal({
                   setRecipientAddress(e.target.value);
                   setErrorNotice(null);
                 }}
-                placeholder="u1... (Unified) or zs1... (Sapling) or t1... (Transparent)"
+                placeholder="t1... (Your wallet&apos;s transparent address)"
                 className={`font-mono text-xs ${
                   addressValidation
                     ? addressValidation.isValid
@@ -368,25 +368,29 @@ export function ClaimModal({
                 <NetworkMismatchAlert isNetworkMismatch={true} />
               ) : addressValidation?.isValid ? (
                 <div className="space-y-2">
-                  <p className="text-[11px] text-emerald-700 flex items-center gap-1 font-medium">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>
-                      Valid Mainnet{" "}
-                      {addressValidation.type === "unified"
-                        ? "Unified"
-                        : addressValidation.type === "sapling"
-                        ? "Sapling"
-                        : "Transparent"}{" "}
-                      address
-                    </span>
-                  </p>
-                  {(addressValidation.type === "p2pkh" || addressValidation.type === "p2sh") && (
-                    <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2 text-xs text-amber-900 animate-in fade-in">
+                  {(addressValidation.type === "p2pkh" || addressValidation.type === "p2sh") ? (
+                    <>
+                      <p className="text-[11px] text-emerald-700 flex items-center gap-1 font-medium">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Valid Mainnet Transparent address (Instant Payout)</span>
+                      </p>
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2 text-xs text-emerald-950 animate-in fade-in">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <span className="font-bold">⚡ Instant Settlement Active</span>
+                          <p className="text-[11px] text-emerald-800 leading-snug">
+                            Payouts to transparent addresses execute in under 2 seconds. You can re-shield your funds directly inside Zashi or YWallet in 1 tap after withdrawal.
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2 text-xs text-amber-950 animate-in fade-in">
                       <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                       <div className="space-y-0.5">
-                        <span className="font-bold">Transparent Address Notice</span>
+                        <span className="font-bold">Shielded Address Detected</span>
                         <p className="text-[11px] text-amber-800 leading-snug">
-                          Transparent addresses do not shield your balance or transaction history on the public blockchain. For complete privacy, consider using a Unified (u1...) or Sapling (zs1...) shielded address.
+                          To bypass heavy zero-knowledge proving delays on cloud nodes, payouts must be sent to your wallet&apos;s transparent address (<code className="font-mono font-bold text-amber-950">t1...</code>). You can easily re-shield in your wallet anytime.
                         </p>
                       </div>
                     </div>
@@ -395,11 +399,11 @@ export function ClaimModal({
               ) : addressValidation && !addressValidation.isValid && recipientAddress.trim().length >= 10 ? (
                 <p className="text-[11px] text-rose-600 flex items-center gap-1 font-medium">
                   <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                  <span>{addressValidation.error || "Please enter a valid Zcash address starting with 'u' or 't'"}</span>
+                  <span>{addressValidation.error || "Please enter a valid Zcash address starting with 't1'"}</span>
                 </p>
               ) : (
                 <p className="text-[11px] text-brown-500">
-                  Paste your Unified Address (u1...), Sapling address (zs1...), or transparent address (t1...).
+                  Paste your wallet&apos;s transparent address (starts with t1...) for instant withdrawal.
                 </p>
               )}
             </div>
@@ -408,10 +412,10 @@ export function ClaimModal({
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1.5 text-left animate-in fade-in">
                 <div className="flex items-center gap-2 text-xs font-bold text-amber-950">
                   <Loader2 className="w-4 h-4 animate-spin text-amber-700 shrink-0" />
-                  <span>Calculating Shielded Proofs (Est. 30–90s)...</span>
+                  <span>Broadcasting Instant Payout to Mainnet...</span>
                 </div>
                 <p className="text-[11px] text-amber-800 leading-relaxed">
-                  Zcash shielded transactions calculate zero-knowledge proofs to keep your destination address private on-chain. Please keep this window open.
+                  Signing transaction with escrow vault and broadcasting directly to the Zcash network. This takes ~1–3 seconds.
                 </p>
               </div>
             )}
@@ -423,7 +427,8 @@ export function ClaimModal({
                 isClaiming ||
                 activeTotalZec <= MINING_FEE_ZEC ||
                 Boolean(addressValidation && !addressValidation.isValid) ||
-                Boolean(addressValidation?.isNetworkMismatch)
+                Boolean(addressValidation?.isNetworkMismatch) ||
+                Boolean(addressValidation && addressValidation.type !== "p2pkh" && addressValidation.type !== "p2sh")
               }
               isLoading={isClaiming}
               variant="primary"

@@ -575,7 +575,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-brown-900">
-                Your Shielded Zcash Address (u1... / zs1... / tm...)
+                Your Transparent Settlement Address (t1...)
               </label>
               <button
                 type="button"
@@ -603,7 +603,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
             </div>
 
             <Input
-              placeholder="Where funds will settle directly upon payment"
+              placeholder="t1... (Your wallet&apos;s transparent address for auto-forwarding)"
               value={shieldedUa}
               onChange={(e) => {
                 setShieldedUa(e.target.value);
@@ -620,18 +620,24 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
             {addressValidation?.isNetworkMismatch ? (
               <NetworkMismatchAlert isNetworkMismatch={true} />
             ) : addressValidation?.isValid ? (
-              <p className="text-[11px] text-emerald-700 flex items-center gap-1 font-medium">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                <span>
-                  Valid Mainnet{" "}
-                  {addressValidation.type === "unified"
-                    ? "Unified"
-                    : addressValidation.type === "sapling"
-                    ? "Sapling"
-                    : "Transparent"}{" "}
-                  address
-                </span>
-              </p>
+              <div className="space-y-1.5">
+                {(addressValidation.type === "p2pkh" || addressValidation.type === "p2sh") ? (
+                  <p className="text-[11px] text-emerald-700 flex items-center gap-1 font-medium">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Valid Mainnet Transparent address (⚡ Instant Auto-Forwarding)</span>
+                  </p>
+                ) : (
+                  <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2 text-xs text-amber-950 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold">Shielded Address Detected</span>
+                      <p className="text-[11px] text-amber-800 leading-snug">
+                        Auto-forwarding requires a transparent address (<code className="font-mono font-bold text-amber-950">t1...</code>) for instant settlement without cloud proving delays. You can easily re-shield in your wallet anytime.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : addressValidation && !addressValidation.isValid && shieldedUa.trim().length >= 10 ? (
               <p className="text-[11px] text-rose-600 flex items-center gap-1 font-medium">
                 <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
@@ -639,7 +645,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
               </p>
             ) : (
               <p className="text-[11px] text-brown-500">
-                Paste your Unified Address (u1...), Sapling address (zs1...), or transparent address (t1...).
+                Paste your wallet&apos;s transparent address (starts with t1...) for instant auto-forwarding.
               </p>
             )}
           </div>
@@ -658,7 +664,8 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
                 !shieldedUa.trim() ||
                 isLoading ||
                 Boolean(addressValidation && !addressValidation.isValid) ||
-                Boolean(addressValidation?.isNetworkMismatch)
+                Boolean(addressValidation?.isNetworkMismatch) ||
+                Boolean(addressValidation && addressValidation.type !== "p2pkh" && addressValidation.type !== "p2sh")
               }
               isLoading={isLoading}
             >

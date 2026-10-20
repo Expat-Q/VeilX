@@ -282,6 +282,15 @@ export default function PayLinkInvoicePage() {
             ) : (
               <>
                 {/* QR Payment Handoff */}
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-950 text-left mb-3 shadow-subtle">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <span className="font-bold">🛡️ Shielded Payment Required</span>
+                    <p className="text-[11px] text-emerald-800 leading-relaxed">
+                      Please send this payment from your shielded pool in Zashi, YWallet, or Noir. Your personal wallet balance and identity remain 100% private.
+                    </p>
+                  </div>
+                </div>
                 {(() => {
                   const depositAddress = invoice.escrowDepositAddress || invoice.recipientShieldedUa;
                   return (

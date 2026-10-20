@@ -1479,6 +1479,15 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
                   </div>
                 ) : (
                   <>
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-950 text-left mb-3">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <span className="font-bold">🛡️ 100% Shielded Tipper Privacy</span>
+                        <p className="text-[11px] text-emerald-800 leading-relaxed">
+                          Please send from your shielded pool in Zashi, YWallet, or Noir. Your wallet balance, address, and transaction graph remain completely invisible.
+                        </p>
+                      </div>
+                    </div>
                     <QRDisplay
                       value={buildZip321Uri({
                         address: generatedEscrowAddress,
