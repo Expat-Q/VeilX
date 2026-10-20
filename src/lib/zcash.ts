@@ -562,7 +562,10 @@ export class ZalletClient {
           try {
             const rawTx = await this.call<any>("getrawtransaction", [fundingTxid, 1]);
             const blockHeight = rawTx?.height;
-            const actions = rawTx?.orchard?.actions || [];
+            const actions =
+              rawTx?.orchard?.actions && rawTx.orchard.actions.length > 0
+                ? rawTx.orchard.actions
+                : rawTx?.ironwood?.actions || [];
             for (const act of actions) {
               const compactAct = {
                 nullifier_hex: act.nullifier || act.nullifier_hex || "",
@@ -803,12 +806,19 @@ export class ZalletClient {
           };
         }
 
-        // Strategy B: Check Shielded Orchard Actions using local Wasm + Platform UFVK
-        if (rawTx.orchard && Array.isArray(rawTx.orchard.actions) && rawTx.orchard.actions.length > 0) {
+        // Strategy B: Check Shielded Orchard / Ironwood Actions using local Wasm + Platform UFVK
+        const shieldedActions =
+          rawTx.orchard && Array.isArray(rawTx.orchard.actions) && rawTx.orchard.actions.length > 0
+            ? rawTx.orchard.actions
+            : rawTx.ironwood && Array.isArray(rawTx.ironwood.actions) && rawTx.ironwood.actions.length > 0
+            ? rawTx.ironwood.actions
+            : [];
+
+        if (shieldedActions.length > 0) {
           let totalShieldedZats = 0;
           let lastDecryptedNote: DecryptedEscrowNote | null = null;
 
-          for (const act of rawTx.orchard.actions) {
+          for (const act of shieldedActions) {
             const compactAct: CompactActionInput = {
               nullifier_hex: act.nullifier || act.nullifier_hex || "",
               cmx_hex: act.cmx || act.cmx_hex || "",
