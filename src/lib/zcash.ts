@@ -247,6 +247,37 @@ export class ZalletClient {
 
       return json.result as T;
     } catch (error: any) {
+      // Automatic Secondary RPC Failover (e.g. NowNodes fallback if GetBlock is unreachable)
+      const fallbackUrl = process.env.NOWNODES_RPC_URL;
+      const fallbackApiKey = process.env.NOWNODES_API_KEY;
+      if (fallbackUrl && this.url !== fallbackUrl) {
+        try {
+          const fallbackHeaders: Record<string, string> = { "Content-Type": "application/json" };
+          if (fallbackApiKey) {
+            fallbackHeaders["api-key"] = fallbackApiKey;
+            fallbackHeaders["x-api-key"] = fallbackApiKey;
+          }
+          const fbRes = await fetch(fallbackUrl, {
+            method: "POST",
+            headers: fallbackHeaders,
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: crypto.randomBytes(4).toString("hex"),
+              method,
+              params,
+            }),
+          });
+          if (fbRes.ok) {
+            const fbJson = await fbRes.json();
+            if (!fbJson.error && fbJson.result !== undefined) {
+              return fbJson.result as T;
+            }
+          }
+        } catch {
+          // Fall through to standard failure handler below
+        }
+      }
+
       const isTimeout = error.name === "AbortError";
       const failureReason = isTimeout ? `RPC request '${method}' timed out after ${timeoutMs}ms` : (error.message || "Connection refused");
 

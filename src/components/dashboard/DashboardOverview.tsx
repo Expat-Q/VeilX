@@ -18,6 +18,7 @@ import {
   TrendingDown,
   RefreshCw,
   ExternalLink,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -579,61 +580,7 @@ export function DashboardOverview({
         </div>
       </div>
 
-      {/* 2. Public Tipping & Referral Rewards Link Card */}
-      <div className="p-4 sm:p-5 bg-butter-50 border border-butter-300 rounded-3xl text-left space-y-3 shadow-subtle">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg bg-brown-900 text-white flex items-center justify-center shadow-subtle shrink-0">
-            <XLogo className="w-3.5 h-3.5 fill-current text-white" />
-          </div>
-          <h4 className="text-xs sm:text-sm font-bold text-brown-950">
-            Your Public X Tipping & Referral Link
-          </h4>
-        </div>
-
-        <p className="text-[11px] sm:text-xs text-brown-600 leading-relaxed">
-          Share your personal link to receive direct zero-knowledge shielded tips and earn rewards whenever new creators join VeilX using your link.
-        </p>
-
-        {/* Live Referral Stats Bar */}
-        <div className="grid grid-cols-2 gap-2 p-2.5 bg-white/80 border border-butter-200 rounded-2xl text-center">
-          <div className="border-r border-butter-200 pr-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-brown-500">Users Referred</p>
-            <p className="text-sm sm:text-base font-bold text-brown-950 font-mono">
-              {user?.referralCount ?? 0} <span className="text-[11px] font-medium text-brown-600">creators</span>
-            </p>
-          </div>
-          <div className="pl-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-brown-500">Rewards Earned</p>
-            <p className="text-sm sm:text-base font-bold text-emerald-700 font-mono">
-              {typeof user?.referralRewardsZec === "number" ? formatZecValue(user.referralRewardsZec) : "0.00"} <span className="text-[11px] font-bold text-emerald-600">ZEC</span>
-              <span className="text-[10px] font-medium text-brown-500 ml-1">({user?.referralPoints ?? 0} pts)</span>
-            </p>
-          </div>
-        </div>
-
-        <div className="p-2.5 bg-white rounded-2xl border border-butter-200 flex items-center justify-between gap-2">
-          <p className="text-xs font-mono text-brown-800 truncate select-all">{tipUrl}</p>
-          <button
-            onClick={handleCopyTipLink}
-            className="py-1.5 px-3 rounded-xl bg-brown-900 hover:bg-brown-950 text-white font-bold transition-all shrink-0 flex items-center gap-1.5 text-xs shadow-subtle active:scale-95"
-            title="Copy Referral Link"
-          >
-            {copiedLink ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-butter-200" />
-                <span className="text-butter-100">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5 text-butter-200" />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* 3. Recent Activity Section */}
+      {/* 2. Recent Activity Section */}
       <div className="space-y-3 text-left">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-bold text-brown-950">Recent Activity</h3>
@@ -660,13 +607,59 @@ export function DashboardOverview({
             <p className="text-xs font-medium text-brown-500">Syncing live blockchain & database activity...</p>
           </div>
         ) : filteredActivity.length === 0 ? (
-          <div className="bg-white border border-butter-300 rounded-3xl p-6">
-            <EmptyState
-              title="No transactions yet"
-              description="Tips you send or receive will appear here in real time."
-              actionLabel="Send a Tip"
-              onAction={onOpenTip}
-            />
+          <div className="bg-white border border-butter-300 rounded-3xl p-6 sm:p-7 text-center space-y-4">
+            <div className="w-12 h-12 bg-butter-50 border border-butter-200 rounded-2xl mx-auto flex items-center justify-center text-brown-800 shadow-subtle">
+              <Sparkles className="w-6 h-6 text-brown-800" />
+            </div>
+            <div className="space-y-1">
+              <h4 className="text-sm sm:text-base font-bold text-brown-950">Welcome to VeilX!</h4>
+              <p className="text-xs text-brown-500 max-w-sm mx-auto leading-relaxed">
+                Your private activity will show up here. Choose an action below to get started:
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-left">
+              <button
+                type="button"
+                onClick={onOpenTip}
+                className="p-3 bg-butter-50 hover:bg-butter-100/80 border border-butter-200 rounded-2xl transition-all flex items-center gap-2.5 active:scale-95 shadow-subtle group"
+              >
+                <div className="w-8 h-8 rounded-xl bg-brown-900 text-white flex items-center justify-center shrink-0 shadow-subtle">
+                  <Send className="w-4 h-4 text-butter-200" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-brown-950 truncate">Send a Tip</p>
+                  <p className="text-[10px] text-brown-500">Private shielded ZEC</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenPayLink}
+                className="p-3 bg-butter-50 hover:bg-butter-100/80 border border-butter-200 rounded-2xl transition-all flex items-center gap-2.5 active:scale-95 shadow-subtle group"
+              >
+                <div className="w-8 h-8 rounded-xl bg-brown-900 text-white flex items-center justify-center shrink-0 shadow-subtle">
+                  <Link2 className="w-4 h-4 text-butter-200" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-brown-950 truncate">Create PayLink</p>
+                  <p className="text-[10px] text-brown-500">Shareable invoice</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenRequest}
+                className="p-3 bg-butter-50 hover:bg-butter-100/80 border border-butter-200 rounded-2xl transition-all flex items-center gap-2.5 active:scale-95 shadow-subtle group"
+              >
+                <div className="w-8 h-8 rounded-xl bg-brown-900 text-white flex items-center justify-center shrink-0 shadow-subtle">
+                  <Inbox className="w-4 h-4 text-butter-200" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-brown-950 truncate">Request ZEC</p>
+                  <p className="text-[10px] text-brown-500">From another 𝕏 user</p>
+                </div>
+              </button>
+            </div>
           </div>
         ) : (
           <div className="space-y-2.5">

@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
+import { rateLimit, getClientIp } from "@/lib/rate-limit";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
+    const ip = getClientIp(req);
+    const rl = rateLimit(`fund_tip_${ip}`, { limit: 20, windowMs: 60000 });
+    if (!rl.success) {
+      return NextResponse.json(
+        { error: `RATE_LIMIT_EXCEEDED: Too many funding verification requests. Please retry in ${rl.resetSeconds}s.` },
+        { status: 429 }
+      );
+    }
+
     const tipId = params.id;
     if (!tipId?.trim()) {
       return NextResponse.json({ error: "Tip ID is required." }, { status: 400 });

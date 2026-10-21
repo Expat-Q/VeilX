@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
 import { getCurrentUser } from "@/lib/auth";
+import { rateLimit, getClientIp } from "@/lib/rate-limit";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
+    const ip = getClientIp(req);
+    const rl = rateLimit(`settle_req_${ip}`, { limit: 15, windowMs: 60000 });
+    if (!rl.success) {
+      return NextResponse.json(
+        { error: `RATE_LIMIT_EXCEEDED: Too many settlement requests. Please retry in ${rl.resetSeconds}s.` },
+        { status: 429 }
+      );
+    }
+
     const requestId = params.id;
     if (!requestId?.trim()) {
       return NextResponse.json({ error: "Request ID is required." }, { status: 400 });
