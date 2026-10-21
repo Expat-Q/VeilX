@@ -3,7 +3,7 @@
 use bip39::Mnemonic;
 use hmac::{Hmac, Mac};
 use k256::ecdsa::SigningKey;
-use k256::elliptic_curve::PrimeField;
+
 use k256::Scalar;
 use ripemd::Ripemd160;
 use serde::{Deserialize, Serialize};

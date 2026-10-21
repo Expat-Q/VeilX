@@ -223,7 +223,7 @@ pub fn build_and_sign_v5_transaction(
 
     // 6. Sign each transparent input under ZIP-244 S.2
     let mut script_sigs = Vec::with_capacity(utxos.len());
-    for (i, u) in utxos.iter().enumerate() {
+    for (_i, u) in utxos.iter().enumerate() {
         // S.2g: txin_sig_digest (prevout || value || scriptPubKey || nSequence)
         let mut txin_data = Vec::new();
         let mut txid_bytes = hex::decode(&u.txid)

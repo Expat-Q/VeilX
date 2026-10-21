@@ -4,14 +4,14 @@ use incrementalmerkletree::Hashable;
 use orchard::{
     builder::{Builder, BundleType},
     bundle::{BundleVersion, Flags},
-    circuit::ProvingKey,
-    keys::{FullViewingKey, SpendAuthorizingKey, SpendingKey},
+    
+    keys::FullViewingKey,
     note::{Note, NoteVersion, Rho, RandomSeed},
     tree::{Anchor, MerkleHashOrchard, MerklePath},
     value::NoteValue,
     Address,
 };
-use crate::orchard_wallet::{ORCHARD_PROVING_KEY, ORCHARD_VERIFYING_KEY};
+
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreateEscrowPcztParams {
