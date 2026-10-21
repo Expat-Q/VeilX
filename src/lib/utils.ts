@@ -5,13 +5,29 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatZec(amount: number | string): string {
+export function formatZecValue(amount: number | string): string {
   const num = typeof amount === "string" ? parseFloat(amount) : amount;
-  if (isNaN(num)) return "0.00 ZEC";
-  return `${num.toFixed(num % 1 === 0 ? 2 : 4)} ZEC`;
+  if (isNaN(num) || num === 0) return "0.00";
+  if (num < 0.0001) {
+    return num.toFixed(6).replace(/\.?0+$/, "");
+  }
+  if (num < 0.01) {
+    return num.toFixed(5).replace(/\.?0+$/, "");
+  }
+  if (num < 1) {
+    return num.toFixed(4).replace(/\.?0+$/, "");
+  }
+  return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+}
+
+export function formatZec(amount: number | string): string {
+  return `${formatZecValue(amount)} ZEC`;
 }
 
 export function formatUsd(amount: number): string {
+  if (amount > 0 && amount < 0.01) {
+    return "< $0.01";
+  }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",

@@ -110,9 +110,9 @@ export function AppNavbar({ user, onLogout }: AppNavbarProps) {
             incoming.slice(0, 3).forEach((t: any) => {
               notifs.push({
                 id: `tip-${t._id || t.id}`,
-                title: t.status === "FUNDED" ? "Shielded Tip Ready to Claim!" : "Tip Received",
+                title: t.status === "FUNDED" ? "Shielded Tip Ready to Claim!" : t.status === "FUNDING_DETECTED" ? "Shielded Tip Incoming (Confirming)" : "Tip Received",
                 description: `${t.isAnonymous ? "An anonymous supporter" : `@${t.senderUsernameSnapshot}`} sent ${t.amountZec} ZEC.`,
-                time: "Recent",
+                time: t.status === "FUNDING_DETECTED" ? "Confirming" : "Recent",
                 status: t.status,
                 type: "tip",
               });

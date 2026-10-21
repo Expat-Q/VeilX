@@ -391,7 +391,7 @@ export class ZalletClient {
   async getLiveOrchardAnchor(): Promise<string> {
     const info = await this.getBlockchainInfo();
     const treeState = await this.call<any>("z_gettreestate", [info.blocks.toString()]);
-    const root = treeState?.orchard?.commitments?.finalRoot;
+    const root = treeState?.orchard?.commitments?.finalRoot || treeState?.ironwood?.commitments?.finalRoot;
     if (!root) {
       throw new Error(`Failed to retrieve live Orchard anchor at block height ${info.blocks}`);
     }
@@ -799,6 +799,7 @@ export class ZalletClient {
           const isPayingToEscrowVault = targetAddresses.has(escrowTransparentVault);
           const hasShieldedInputs =
             (rawTx.orchard && Array.isArray(rawTx.orchard.actions) && rawTx.orchard.actions.length > 0) ||
+            (rawTx.ironwood && Array.isArray(rawTx.ironwood.actions) && rawTx.ironwood.actions.length > 0) ||
             (rawTx.vSpendsSapling && Array.isArray(rawTx.vSpendsSapling) && rawTx.vSpendsSapling.length > 0) ||
             (rawTx.vShieldedSpend && Array.isArray(rawTx.vShieldedSpend) && rawTx.vShieldedSpend.length > 0);
           const hasTransparentInputs =
@@ -910,7 +911,8 @@ export class ZalletClient {
         // Public nodes (GetBlock/NowNodes/Zebra) do not decrypt shielded notes into JSON RPC responses.
         // If the transaction has an on-chain shielded bundle (Orchard / Sapling) and no conflicting transparent outputs:
         const isShieldedTx = Boolean(
-          rawTx.orchard ||
+          (rawTx.orchard && (!Array.isArray(rawTx.orchard.actions) || rawTx.orchard.actions.length > 0)) ||
+          (rawTx.ironwood && (!Array.isArray(rawTx.ironwood.actions) || rawTx.ironwood.actions.length > 0)) ||
           (Array.isArray(rawTx.vShieldedOutput) && rawTx.vShieldedOutput.length > 0) ||
           (Array.isArray(rawTx.vShieldedSpend) && rawTx.vShieldedSpend.length > 0) ||
           (rawTx.hex && rawTx.hex.length > 1000)

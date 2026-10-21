@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { XLogo } from "@/components/ui/XLogo";
-import { formatUsd, truncateAddress, getZcashExplorerUrl } from "@/lib/utils";
+import { formatUsd, formatZecValue, truncateAddress, getZcashExplorerUrl } from "@/lib/utils";
 import { useZecPrice } from "@/lib/price-service";
 
 export interface DashboardOverviewProps {
@@ -295,7 +295,7 @@ export function DashboardOverview({
 
   const claimableTips = activity.filter((a) => a.type === "received" && a.status === "FUNDED");
   const syncingTips = activity.filter(
-    (a) => a.type === "received" && (a.status === "CLAIMING" || a.status === "PENDING_VERIFICATION")
+    (a) => a.type === "received" && (a.status === "CLAIMING" || a.status === "PENDING_VERIFICATION" || a.status === "FUNDING_DETECTED")
   );
   const pendingTips = claimableTips;
   const pendingIncomingTotal = [...claimableTips, ...syncingTips].reduce(
@@ -303,6 +303,13 @@ export function DashboardOverview({
     0
   );
   const safePendingTotal = typeof pendingIncomingTotal === "number" && !isNaN(pendingIncomingTotal) ? pendingIncomingTotal : 0;
+
+  const claimedTips = activity.filter((a) => a.type === "received" && a.status === "CLAIMED");
+  const totalClaimedZec = claimedTips.reduce(
+    (acc, curr) => acc + (typeof curr.amountZec === "number" ? curr.amountZec : parseFloat(curr.amountZec) || 0),
+    0
+  );
+  const safeClaimedTotal = typeof totalClaimedZec === "number" && !isNaN(totalClaimedZec) ? totalClaimedZec : 0;
 
   const handleTriggerClaim = () => {
     if (pendingTips.length > 1 && onOpenBatchClaim) {
@@ -369,25 +376,74 @@ export function DashboardOverview({
           </button>
         </div>
 
-        <div className="text-center space-y-1.5 py-2">
-          <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-brown-400">
-            Pending Shielded Tips to Claim
-          </p>
-          <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
-            {safePendingTotal.toFixed(2)} <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
-          </p>
-          <p className="text-xs font-medium text-brown-500">
-            ≈ {formatZecToUsd(safePendingTotal)} USD
-            {syncingTips.length > 0 && claimableTips.length === 0 && (
-              <span className="block text-amber-600 font-semibold mt-1">
-                ({syncingTips.length} tip currently syncing escrow payout...)
-              </span>
-            )}
-          </p>
+        <div className="text-center space-y-2 py-2">
+          {safePendingTotal > 0 ? (
+            <>
+              <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-brown-400">
+                Pending Shielded Tips to Claim
+              </p>
+              <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
+                {formatZecValue(safePendingTotal)} <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
+              </p>
+              <p className="text-xs font-medium text-brown-500">
+                ≈ {formatZecToUsd(safePendingTotal)} USD
+                {syncingTips.length > 0 && claimableTips.length === 0 && (
+                  <span className="block text-amber-600 font-semibold mt-1">
+                    ({syncingTips.length} tip currently syncing escrow payout...)
+                  </span>
+                )}
+              </p>
+              {safeClaimedTotal > 0 && (
+                <div className="pt-1.5 flex items-center justify-center">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-butter-50 border border-butter-200 rounded-full text-[11px] font-medium text-brown-700 shadow-subtle">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>
+                      Total Claimed: <strong className="font-mono font-bold text-brown-900">{formatZecValue(safeClaimedTotal)} ZEC</strong> ({claimedTips.length} {claimedTips.length === 1 ? "tip" : "tips"})
+                    </span>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : safeClaimedTotal > 0 ? (
+            <>
+              <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-emerald-700">
+                Total Shielded Tips Claimed
+              </p>
+              <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
+                {formatZecValue(safeClaimedTotal)} <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
+              </p>
+              <p className="text-xs font-medium text-brown-500">
+                ≈ {formatZecToUsd(safeClaimedTotal)} USD
+              </p>
+              <div className="pt-1.5 flex items-center justify-center">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 rounded-full text-[11px] font-medium text-emerald-800 shadow-subtle">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>All {claimedTips.length} {claimedTips.length === 1 ? "tip" : "tips"} claimed to self-custodial wallet ✓</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-brown-400">
+                Shielded Escrow Balance
+              </p>
+              <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
+                0.00 <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
+              </p>
+              <p className="text-xs font-medium text-brown-500">
+                ≈ $0.00 USD
+              </p>
+              <div className="pt-1.5 flex items-center justify-center">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-butter-50 border border-butter-200 rounded-full text-[11px] font-medium text-brown-600 shadow-subtle">
+                  <span>Share your tip link to receive private ZEC tips directly</span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Claim All Banner Pill if user has pending tips */}
-        {pendingTips.length > 0 && (
+        {/* Claim All Banner Pill if user has pending tips, else Share Link Banner */}
+        {pendingTips.length > 0 ? (
           <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 shadow-subtle animate-in fade-in">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-subtle">
@@ -398,7 +454,7 @@ export function DashboardOverview({
                   {pendingTips.length === 1 ? "1 Tip Waiting in Escrow" : `${pendingTips.length} Tips Waiting in Escrow`}
                 </p>
                 <p className="text-[11px] text-emerald-700 font-mono">
-                  {safePendingTotal.toFixed(4)} ZEC ready to claim
+                  {formatZecValue(safePendingTotal)} ZEC ready to claim
                 </p>
               </div>
             </div>
@@ -409,6 +465,30 @@ export function DashboardOverview({
             >
               <span>{pendingTips.length > 1 ? "⚡ Claim All" : "Claim"}</span>
               <ArrowUpRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div className="p-3.5 bg-butter-50 border border-butter-200 rounded-2xl flex items-center justify-between gap-3 shadow-subtle animate-in fade-in">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-butter-200 text-brown-900 flex items-center justify-center shrink-0 shadow-subtle">
+                <Share2 className="w-4 h-4 text-brown-800" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-brown-900 truncate">
+                  Your Tip Link is Active
+                </p>
+                <p className="text-[11px] text-brown-600 truncate font-mono">
+                  {tipUrl.replace(/^https?:\/\//, "")}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopyTipLink}
+              className="px-3.5 py-2 bg-brown-900 hover:bg-brown-950 text-white font-bold text-xs rounded-xl shadow-subtle transition-all shrink-0 active:scale-95 flex items-center gap-1.5"
+            >
+              {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedLink ? "Copied!" : "Copy Link"}</span>
             </button>
           </div>
         )}
@@ -423,8 +503,8 @@ export function DashboardOverview({
               <Shield className="w-4 h-4 text-emerald-200" />
               <span>
                 {pendingTips.length > 1
-                  ? `⚡ Claim All ${pendingTips.length} Tips (${safePendingTotal.toFixed(2)} ZEC)`
-                  : `Claim ${safePendingTotal.toFixed(2)} ZEC to Wallet`}
+                  ? `⚡ Claim All ${pendingTips.length} Tips (${formatZecValue(safePendingTotal)} ZEC)`
+                  : `Claim ${formatZecValue(safePendingTotal)} ZEC to Wallet`}
               </span>
             </button>
           ) : (
@@ -520,7 +600,7 @@ export function DashboardOverview({
           <div className="pl-2">
             <p className="text-[10px] font-bold uppercase tracking-wider text-brown-500">Rewards Earned</p>
             <p className="text-sm sm:text-base font-bold text-emerald-700 font-mono">
-              {typeof user?.referralRewardsZec === "number" ? user.referralRewardsZec.toFixed(2) : "0.00"} <span className="text-[11px] font-bold text-emerald-600">ZEC</span>
+              {typeof user?.referralRewardsZec === "number" ? formatZecValue(user.referralRewardsZec) : "0.00"} <span className="text-[11px] font-bold text-emerald-600">ZEC</span>
               <span className="text-[10px] font-medium text-brown-500 ml-1">({user?.referralPoints ?? 0} pts)</span>
             </p>
           </div>
@@ -857,6 +937,10 @@ export function DashboardOverview({
                             ? "Claimed by Recipient"
                             : item.type === "sent" && item.status === "PENDING_VERIFICATION"
                             ? "Claim in Progress"
+                            : item.type === "sent" && item.status === "FUNDING_DETECTED"
+                            ? "Confirming on-chain"
+                            : item.type === "received" && item.status === "FUNDING_DETECTED"
+                            ? "Incoming (Confirming)"
                             : undefined
                         }
                       />

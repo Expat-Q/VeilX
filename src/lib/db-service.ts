@@ -83,7 +83,7 @@ export const dbService = {
 
       const filter: any = {};
       if (!includeUnfunded) {
-        filter.status = { $in: ["FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"] };
+        filter.status = { $in: ["FUNDING_DETECTED", "FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"] };
       }
       if (userId || username) {
         const clean = username ? username.replace("@", "").trim() : "";
@@ -109,7 +109,7 @@ export const dbService = {
     }
 
     // In-memory development fallback (only reached if MongoDB is unreachable)
-    const validStatuses = new Set(["FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"]);
+    const validStatuses = new Set(["FUNDING_DETECTED", "FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"]);
     if (username) {
       const clean = username.replace("@", "").trim().toLowerCase();
       return memoryStore.tips.filter(
