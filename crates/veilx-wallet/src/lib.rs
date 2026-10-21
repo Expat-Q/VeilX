@@ -8,6 +8,7 @@ pub mod orchard_wallet;
 pub mod transaction;
 pub mod tree_manager;
 pub mod unified_address;
+pub mod pczt_escrow;
 
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;

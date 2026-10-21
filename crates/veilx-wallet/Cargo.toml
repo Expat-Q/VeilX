@@ -34,6 +34,7 @@ getrandom = { version = "0.2", features = ["js"] }
 getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 zcash_address = "0.13.0"
 zcash_protocol = "0.10.6"
+pczt = { version = "0.10.0-pre.2", default-features = false, features = ["orchard", "signer", "prover", "tx-extractor"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
