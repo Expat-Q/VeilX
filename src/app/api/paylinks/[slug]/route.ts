@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
 import { getCurrentUser } from "@/lib/auth";
 import { ufvkWatcher } from "@/lib/escrow/ufvk-watcher";
+import { zallet } from "@/lib/zcash";
 
 export async function GET(
   req: NextRequest,
@@ -60,6 +61,14 @@ export async function GET(
           user.xUsername?.toLowerCase() ===
             paylink.creatorUsernameSnapshot.toLowerCase()));
 
+    const activeTransparentVault = zallet.getEscrowTransparentAddress();
+    const activeEscrowDeposit =
+      !paylink.escrowDepositAddress ||
+      paylink.escrowDepositAddress.startsWith("u1") ||
+      paylink.escrowDepositAddress.startsWith("utest1")
+        ? activeTransparentVault
+        : paylink.escrowDepositAddress;
+
     const safePaylink: any = {
       _id: paylink._id,
       id: paylink.id || paylink._id,
@@ -68,7 +77,7 @@ export async function GET(
       description: paylink.description,
       creatorUsernameSnapshot: paylink.creatorUsernameSnapshot,
       amountZec: paylink.amountZec,
-      escrowDepositAddress: paylink.escrowDepositAddress,
+      escrowDepositAddress: activeEscrowDeposit,
       status: paylink.status,
       paidTxid: paylink.paidTxid,
       forwardTxid: paylink.forwardTxid,

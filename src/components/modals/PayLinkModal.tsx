@@ -131,7 +131,7 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
     <Modal
       isOpen={isOpen}
       onClose={handleReset}
-      title={createdPayLink ? "PayLink Ready!" : "Create Shielded PayLink"}
+      title={createdPayLink ? "PayLink Ready!" : "Create PayLink Invoice"}
       subtitle={
         createdPayLink
           ? "Share this one-time invoice link to receive private payments"

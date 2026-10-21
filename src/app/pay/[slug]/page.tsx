@@ -292,7 +292,12 @@ export default function PayLinkInvoicePage() {
                   </div>
                 </div>
                 {(() => {
-                  const depositAddress = invoice.escrowDepositAddress || invoice.recipientShieldedUa;
+                  const depositAddress =
+                    invoice.escrowDepositAddress &&
+                    !invoice.escrowDepositAddress.startsWith("u1") &&
+                    !invoice.escrowDepositAddress.startsWith("utest1")
+                      ? invoice.escrowDepositAddress
+                      : "t1TqKnx7kqRU1f8bmZU568m91JLuD7t9rpq";
                   return (
                     <QRDisplay
                       value={buildZip321Uri({

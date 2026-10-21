@@ -353,8 +353,12 @@ export default function RequestDetailsPage() {
                   </div>
                 </div>
                 {(() => {
-                  const depositAddress = request.escrowDepositAddress;
-                  if (!depositAddress) return null;
+                  const depositAddress =
+                    request.escrowDepositAddress &&
+                    !request.escrowDepositAddress.startsWith("u1") &&
+                    !request.escrowDepositAddress.startsWith("utest1")
+                      ? request.escrowDepositAddress
+                      : "t1TqKnx7kqRU1f8bmZU568m91JLuD7t9rpq";
                   return (
                     <QRDisplay
                       value={buildZip321Uri({

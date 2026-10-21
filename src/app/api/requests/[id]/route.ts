@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
 import { getCurrentUser } from "@/lib/auth";
 import { ufvkWatcher } from "@/lib/escrow/ufvk-watcher";
+import { zallet } from "@/lib/zcash";
 
 export async function GET(
   req: NextRequest,
@@ -60,6 +61,14 @@ export async function GET(
           user.xUsername?.toLowerCase() ===
             request.requesterUsernameSnapshot.toLowerCase()));
 
+    const activeTransparentVault = zallet.getEscrowTransparentAddress();
+    const activeEscrowDeposit =
+      !request.escrowDepositAddress ||
+      request.escrowDepositAddress.startsWith("u1") ||
+      request.escrowDepositAddress.startsWith("utest1")
+        ? activeTransparentVault
+        : request.escrowDepositAddress;
+
     // Redact private shielded UA for non-owners to prevent PII/financial tracking
     const safeRequest: any = {
       _id: request._id,
@@ -68,7 +77,7 @@ export async function GET(
       targetUsernameSnapshot: request.targetUsernameSnapshot,
       amountZec: request.amountZec,
       memo: request.memo,
-      escrowDepositAddress: request.escrowDepositAddress,
+      escrowDepositAddress: activeEscrowDeposit,
       status: request.status,
       paidTxid: request.paidTxid,
       forwardTxid: request.forwardTxid,

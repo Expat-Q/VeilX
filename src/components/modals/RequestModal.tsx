@@ -321,7 +321,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
         step === 1
           ? "Search by 𝕏 handle to specify who should settle this request"
           : step === 2
-          ? "Set amount, note, and your receiving shielded Zcash address"
+          ? "Set amount, note, and your transparent settlement address (t1...)"
           : "Share this link with them to settle non-custodially"
       }
     >
@@ -515,7 +515,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
         </div>
       )}
 
-      {/* STEP 2: Amount, Note & Receiving Shielded Address */}
+      {/* STEP 2: Amount, Note & Transparent Settlement Address */}
       {step === 2 && selectedUser && (
         <div className="space-y-4 text-left">
           {errorNotice && (
