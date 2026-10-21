@@ -313,7 +313,7 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
       }
 
       const tipId = data.tip._id || data.tip.id;
-      const escrowAddress = data.tip.escrowAddress;
+      const escrowAddress = data.tip.escrowDepositAddress || data.tip.escrowAddress;
       setCreatedTipId(tipId);
       setGeneratedEscrowAddress(escrowAddress);
 
@@ -1479,12 +1479,12 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
                   </div>
                 ) : (
                   <>
-                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-950 text-left mb-3">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl flex items-start gap-2.5 text-xs text-amber-950 text-left mb-3 shadow-subtle">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                       <div className="space-y-0.5">
-                        <span className="font-bold">🛡️ 100% Shielded Tipper Privacy</span>
-                        <p className="text-[11px] text-emerald-800 leading-relaxed">
-                          Please send from your shielded pool in Zashi, YWallet, or Noir. Your wallet balance, address, and transaction graph remain completely invisible.
+                        <span className="font-bold">⚠️ Shielded Inflow Required (100% Tipper Privacy)</span>
+                        <p className="text-[11px] text-amber-900 leading-relaxed">
+                          You must send this payment from your <strong>shielded balance</strong> in Zashi, YWallet, or Noir. Transactions from transparent balances (<code className="font-mono font-bold text-amber-950">t1...</code>) are strictly rejected to prevent privacy leakage.
                         </p>
                       </div>
                     </div>

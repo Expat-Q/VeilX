@@ -379,7 +379,7 @@ export function QRDisplay({
       <div className="w-full p-2.5 bg-butter-50 border border-butter-200 rounded-2xl flex items-center justify-between gap-2 text-left">
         <div className="min-w-0 flex-1">
           <p className="text-[10px] uppercase font-bold text-brown-400 tracking-wider">
-            Shielded Escrow Address
+            Escrow Deposit Address
           </p>
           <p className="text-xs font-mono font-medium text-brown-800 truncate">
             {truncateAddress(address, 12, 10)}

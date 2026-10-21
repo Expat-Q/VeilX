@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   ShieldCheck,
+  AlertCircle,
   ExternalLink,
   Lock,
   CheckCircle2,
@@ -151,13 +152,13 @@ export default function DirectTipPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok || !data.success || !data.tip?.escrowAddress) {
+      if (!res.ok || !data.success || (!data.tip?.escrowAddress && !data.tip?.escrowDepositAddress)) {
         setErrorMessage(data?.error || "Failed to generate escrow address. Please try again.");
         setIsLoading(false);
         return;
       }
 
-      const generatedAddr = data.tip.escrowAddress;
+      const generatedAddr = data.tip.escrowDepositAddress || data.tip.escrowAddress;
       const tipId = data.tip._id || data.tip.id;
       setEscrowAddress(generatedAddr);
       setCreatedTipId(tipId);
@@ -710,7 +711,17 @@ export default function DirectTipPage() {
                 </div>
 
                 {escrowAddress && (
-                  <QRDisplay
+                  <>
+                    <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl flex items-start gap-2.5 text-xs text-amber-950 text-left shadow-subtle">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <span className="font-bold">⚠️ Shielded Inflow Required (100% Tipper Privacy)</span>
+                        <p className="text-[11px] text-amber-900 leading-relaxed">
+                          You must send this payment from your <strong>shielded balance</strong> in Zashi, YWallet, or Noir. Transactions from transparent balances (<code className="font-mono font-bold text-amber-950">t1...</code>) are strictly rejected to prevent privacy leakage.
+                        </p>
+                      </div>
+                    </div>
+                    <QRDisplay
                     value={buildZip321Uri({
                       address: escrowAddress,
                       amountZec: parseFloat(amountZec),
@@ -721,6 +732,7 @@ export default function DirectTipPage() {
                     memo={memo || "VeilX Private Tip"}
                     onPaymentConfirmed={() => setSwapStep("SETTLED")}
                   />
+                  </>
                 )}
               </div>
             )}

@@ -10,6 +10,7 @@ export interface IPaymentLink extends Document {
   amountZec: number;
   recipientShieldedUa: string;
   escrowDepositAddress: string;
+  shieldedEscrowAddress?: string;
   diversifierIndex?: string;
   status: InvoiceStatus;
   paidAt?: Date;
@@ -30,6 +31,7 @@ const PaymentLinkSchema = new Schema<IPaymentLink>(
     amountZec: { type: Number, required: true },
     recipientShieldedUa: { type: String, required: true },
     escrowDepositAddress: { type: String, required: true, index: true },
+    shieldedEscrowAddress: { type: String },
     diversifierIndex: { type: String },
     status: {
       type: String,

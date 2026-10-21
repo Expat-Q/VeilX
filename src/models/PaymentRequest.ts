@@ -11,6 +11,7 @@ export interface IPaymentRequest extends Document {
   memo?: string;
   recipientShieldedUa: string; // Requester's destination
   escrowDepositAddress: string;
+  shieldedEscrowAddress?: string;
   diversifierIndex?: string;
   status: RequestStatus;
   paidTxid?: string;
@@ -34,6 +35,7 @@ const PaymentRequestSchema = new Schema<IPaymentRequest>(
     memo: { type: String },
     recipientShieldedUa: { type: String, required: true },
     escrowDepositAddress: { type: String, required: true, index: true },
+    shieldedEscrowAddress: { type: String },
     diversifierIndex: { type: String },
     status: {
       type: String,

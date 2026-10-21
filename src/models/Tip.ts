@@ -22,6 +22,7 @@ export interface ITip extends Document {
 
   // Escrow Address
   escrowAddress: string;             // Unique diversified UA (u1test1...)
+  escrowDepositAddress?: string;     // Active deposit vault (t1...)
   diversifierIndex: string;          // 11-byte hex diversifier index
 
   // State Machine
@@ -55,7 +56,8 @@ const TipSchema = new Schema<ITip>(
     isAnonymous: { type: Boolean, default: false },
     memo: { type: String },
 
-    escrowAddress: { type: String, required: true, unique: true, index: true },
+    escrowAddress: { type: String, required: true, index: true },
+    escrowDepositAddress: { type: String, index: true },
     diversifierIndex: { type: String, required: true },
 
     status: {

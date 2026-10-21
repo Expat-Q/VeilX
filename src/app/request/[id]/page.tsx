@@ -343,12 +343,12 @@ export default function RequestDetailsPage() {
             ) : (
               <>
                 {/* QR Payment Handoff */}
-                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-950 text-left mb-3 shadow-subtle">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl flex items-start gap-2.5 text-xs text-amber-950 text-left mb-3 shadow-subtle">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                   <div className="space-y-0.5">
-                    <span className="font-bold">🛡️ Shielded Payment Required</span>
-                    <p className="text-[11px] text-emerald-800 leading-relaxed">
-                      Please pay this request using your shielded wallet (Zashi, YWallet, or Noir). Your personal address and balance are never revealed.
+                    <span className="font-bold">⚠️ Shielded Inflow Required (Privacy Guard)</span>
+                    <p className="text-[11px] text-amber-900 leading-relaxed">
+                      You must send this payment from your <strong>shielded balance</strong> in Zashi, YWallet, or Noir. Transactions from transparent balances (<code className="font-mono font-bold text-amber-950">t1...</code>) are strictly rejected to prevent privacy leakage.
                     </p>
                   </div>
                 </div>

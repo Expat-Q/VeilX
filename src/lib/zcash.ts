@@ -298,6 +298,18 @@ export class ZalletClient {
   }
 
   /**
+   * Returns the platform escrow transparent vault address
+   */
+  getEscrowTransparentAddress(): string {
+    return (
+      process.env.ESCROW_PLATFORM_TRANSPARENT_ADDRESS ||
+      (ZCASH_NETWORK === "mainnet"
+        ? "t1TqKnx7kqRU1f8bmZU568m91JLuD7t9rpq"
+        : "tm9w5Z3w58Z2g4d18Z2g4d18Z2g4d18Z2g4")
+    );
+  }
+
+  /**
    * Retrieves received notes belonging to a specific address or all escrow accounts
    */
   async listReceivedNotes(address?: string, minConfirmations = 1): Promise<ZalletReceivedNote[]> {
@@ -746,7 +758,11 @@ export class ZalletClient {
         const confirmations = typeof rawTx.confirmations === "number" ? rawTx.confirmations : 0;
         // Check transparent outputs (vout)
         // If expectedAddress is a Unified Address, decode its embedded transparent receiver (t1... or tm...)
+        const escrowTransparentVault = this.getEscrowTransparentAddress();
         const targetAddresses = new Set<string>([expectedAddress]);
+        if (expectedAddress === escrowTransparentVault || expectedAddress.startsWith("u1") || expectedAddress.startsWith("utest1")) {
+          targetAddresses.add(escrowTransparentVault);
+        }
         if (expectedAddress.startsWith("u1") || expectedAddress.startsWith("utest1")) {
           try {
             const wasm = await getWasmEngine();
@@ -779,6 +795,27 @@ export class ZalletClient {
         }
 
         if (totalPaidToTarget >= expectedAmountZec * 0.999) {
+          // Verify that deposits to the escrow vault originated from a shielded pool
+          const isPayingToEscrowVault = targetAddresses.has(escrowTransparentVault);
+          const hasShieldedInputs =
+            (rawTx.orchard && Array.isArray(rawTx.orchard.actions) && rawTx.orchard.actions.length > 0) ||
+            (rawTx.vSpendsSapling && Array.isArray(rawTx.vSpendsSapling) && rawTx.vSpendsSapling.length > 0) ||
+            (rawTx.vShieldedSpend && Array.isArray(rawTx.vShieldedSpend) && rawTx.vShieldedSpend.length > 0);
+          const hasTransparentInputs =
+            Array.isArray(rawTx.vin) &&
+            rawTx.vin.length > 0 &&
+            rawTx.vin.some((inTx: any) => inTx.txid && inTx.txid !== "0000000000000000000000000000000000000000000000000000000000000000");
+
+          if (isPayingToEscrowVault && !hasShieldedInputs && hasTransparentInputs) {
+            return {
+              verified: false,
+              actualAmountZec: totalPaidToTarget,
+              confirmations,
+              blockHeight: rawTx.height,
+              reason: "TRANSPARENT_INFLOW_REJECTED: Transaction was sent from a transparent address. VeilX requires all deposits to originate from a shielded balance (Zashi, YWallet, or Noir) to guarantee 100% sender privacy.",
+            };
+          }
+
           if (confirmations < minConfirmations) {
             return {
               verified: false,

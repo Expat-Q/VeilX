@@ -86,11 +86,13 @@ export const dbService = {
         filter.status = { $in: ["FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"] };
       }
       if (userId || username) {
+        const clean = username ? username.replace("@", "").trim() : "";
+        const handleRegex = clean ? new RegExp(`^${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") : null;
         filter.$or = [
           ...(userId ? [{ senderUserId: userId }] : []),
-          ...(username ? [
-            { recipientUsernameSnapshot: username.replace("@", "") },
-            { senderUsernameSnapshot: username.replace("@", "") },
+          ...(handleRegex ? [
+            { recipientUsernameSnapshot: handleRegex },
+            { senderUsernameSnapshot: handleRegex },
           ] : []),
         ];
       }
@@ -109,11 +111,11 @@ export const dbService = {
     // In-memory development fallback (only reached if MongoDB is unreachable)
     const validStatuses = new Set(["FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"]);
     if (username) {
-      const clean = username.replace("@", "");
+      const clean = username.replace("@", "").trim().toLowerCase();
       return memoryStore.tips.filter(
         (t) =>
           (includeUnfunded || validStatuses.has(t.status)) &&
-          (t.recipientUsernameSnapshot === clean || t.senderUsernameSnapshot === clean)
+          (t.recipientUsernameSnapshot?.toLowerCase() === clean || t.senderUsernameSnapshot?.toLowerCase() === clean)
       );
     }
     return includeUnfunded ? memoryStore.tips : memoryStore.tips.filter((t) => validStatuses.has(t.status));
@@ -147,7 +149,7 @@ export const dbService = {
     // 3. Server-side payment verification (allow 0-conf mempool detection)
     const verification = await zallet.verifyPaymentTransaction({
       txid: cleanTxid,
-      expectedAddress: tip.escrowAddress,
+      expectedAddress: tip.escrowDepositAddress || tip.escrowAddress,
       expectedAmountZec: tip.amountZec,
       minConfirmations: 0,
     });
@@ -235,6 +237,7 @@ export const dbService = {
     memo?: string;
   }) {
     const escrow = await zallet.getNewEscrowAddress();
+    const transparentEscrow = zallet.getEscrowTransparentAddress();
     const amountZats = Math.round(params.amountZec * 100000000);
 
     const tipPayload = {
@@ -247,6 +250,7 @@ export const dbService = {
       isAnonymous: params.isAnonymous ?? true,
       memo: params.memo,
       escrowAddress: escrow.unifiedAddress,
+      escrowDepositAddress: transparentEscrow,
       diversifierIndex: escrow.diversifierIndex,
       status: "CREATED" as const,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
@@ -882,9 +886,11 @@ export const dbService = {
       await connectToDatabase();
       const filter: any = {};
       if (username) {
+        const clean = username.replace("@", "").trim();
+        const handleRegex = new RegExp(`^${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
         filter.$or = [
-          { requesterUsernameSnapshot: username.replace("@", "") },
-          { targetUsernameSnapshot: username.replace("@", "") },
+          { requesterUsernameSnapshot: handleRegex },
+          { targetUsernameSnapshot: handleRegex },
         ];
       }
       const requests = await PaymentRequest.find(filter).sort({ createdAt: -1 }).limit(50).lean();
@@ -894,7 +900,16 @@ export const dbService = {
         throw new Error("Database connection error while retrieving payment requests.");
       }
     }
-    return IS_PRODUCTION ? [] : memoryStore.requests;
+    if (IS_PRODUCTION) return [];
+    if (username) {
+      const clean = username.replace("@", "").trim().toLowerCase();
+      return memoryStore.requests.filter(
+        (r) =>
+          r.requesterUsernameSnapshot?.toLowerCase() === clean ||
+          r.targetUsernameSnapshot?.toLowerCase() === clean
+      );
+    }
+    return memoryStore.requests;
   },
 
   async getRequestById(id: string) {
@@ -930,16 +945,18 @@ export const dbService = {
     }
 
     const escrow = await zallet.getNewEscrowAddress();
+    const transparentEscrow = zallet.getEscrowTransparentAddress();
 
     const payload = {
       requesterUserId: params.requesterUserId,
-      requesterUsernameSnapshot: params.requesterUsername.replace("@", ""),
-      targetXUserId: params.targetXUserId || `mock_${params.targetUsername.replace("@", "")}`,
-      targetUsernameSnapshot: params.targetUsername.replace("@", ""),
+      requesterUsernameSnapshot: params.requesterUsername.replace("@", "").trim(),
+      targetXUserId: params.targetXUserId || `mock_${params.targetUsername.replace("@", "").trim()}`,
+      targetUsernameSnapshot: params.targetUsername.replace("@", "").trim(),
       amountZec: params.amountZec,
       memo: params.memo,
       recipientShieldedUa: params.recipientShieldedUa,
-      escrowDepositAddress: escrow.unifiedAddress,
+      escrowDepositAddress: transparentEscrow,
+      shieldedEscrowAddress: escrow.unifiedAddress,
       diversifierIndex: escrow.diversifierIndex,
       status: "PENDING" as const,
       createdAt: new Date(),
@@ -1134,7 +1151,8 @@ export const dbService = {
       await connectToDatabase();
       const filter: any = {};
       if (username) {
-        filter.creatorUsernameSnapshot = username.replace("@", "");
+        const clean = username.replace("@", "").trim();
+        filter.creatorUsernameSnapshot = new RegExp(`^${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
       }
       const links = await PaymentLink.find(filter).sort({ createdAt: -1 }).limit(50).lean();
       return links || [];
@@ -1143,7 +1161,14 @@ export const dbService = {
         throw new Error("Database connection error while retrieving PayLinks.");
       }
     }
-    return IS_PRODUCTION ? [] : memoryStore.paylinks;
+    if (IS_PRODUCTION) return [];
+    if (username) {
+      const clean = username.replace("@", "").trim().toLowerCase();
+      return memoryStore.paylinks.filter(
+        (l) => l.creatorUsernameSnapshot?.toLowerCase() === clean
+      );
+    }
+    return memoryStore.paylinks;
   },
 
   async getPayLinkBySlug(slug: string) {
@@ -1176,15 +1201,17 @@ export const dbService = {
     }
 
     const escrow = await zallet.getNewEscrowAddress();
+    const transparentEscrow = zallet.getEscrowTransparentAddress();
     const slug = `inv_${crypto.randomBytes(4).toString("hex")}`;
     const payload = {
       creatorUserId: params.creatorUserId,
-      creatorUsernameSnapshot: params.creatorUsername.replace("@", ""),
+      creatorUsernameSnapshot: params.creatorUsername.replace("@", "").trim(),
       slug,
       title: params.title,
       amountZec: params.amountZec,
       recipientShieldedUa: params.recipientShieldedUa,
-      escrowDepositAddress: escrow.unifiedAddress,
+      escrowDepositAddress: transparentEscrow,
+      shieldedEscrowAddress: escrow.unifiedAddress,
       diversifierIndex: escrow.diversifierIndex,
       status: "UNPAID" as const,
       createdAt: new Date(),
