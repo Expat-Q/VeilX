@@ -21,6 +21,7 @@ import { connectBrowserWallet, isMobileDevice } from "@/lib/wallet";
 import { validateZcashAddressFull } from "@/lib/zcash-address";
 import { NetworkMismatchAlert } from "@/components/ui/NetworkMismatchAlert";
 import { useZecPrice } from "@/lib/price-service";
+import { formatZecValue } from "@/lib/utils";
 
 export interface PayLinkModalProps {
   isOpen: boolean;
@@ -163,8 +164,18 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
               setAmountZec(v);
               setErrorNotice(null);
             }}
-            label="Requested Amount (ZEC)"
+            label="Requested Amount (Min 0.0002 ZEC)"
           />
+          {parseFloat(amountZec) > 0 && parseFloat(amountZec) < 0.0002 && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 p-2 rounded-xl">
+              ⚠️ Minimum amount is 0.0002 ZEC to cover the 0.0001 ZEC Zcash network miner fee.
+            </p>
+          )}
+          {parseFloat(amountZec) >= 0.0002 && (
+            <p className="text-[11px] text-brown-500 font-mono">
+              Net received in your wallet: {formatZecValue(Math.max(0, Math.round((parseFloat(amountZec) - 0.0001) * 100000000) / 100000000))} ZEC (after 0.0001 miner fee)
+            </p>
+          )}
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -244,6 +255,7 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
               disabled={
                 !title.trim() ||
                 !amountZec ||
+                parseFloat(amountZec) < 0.0002 ||
                 !shieldedUa.trim() ||
                 isLoading ||
                 Boolean(addressValidation && !addressValidation.isValid) ||

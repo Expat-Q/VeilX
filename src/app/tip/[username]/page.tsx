@@ -31,7 +31,8 @@ import {
   SupportedSwapToken,
   SwapOrder,
 } from "@/types/swap";
-import { truncateAddress } from "@/lib/utils";
+import { truncateAddress, getZcashExplorerUrl } from "@/lib/utils";
+import { InvoiceReceiptCard } from "@/components/ui/InvoiceReceiptCard";
 import { EvmAssetDropdown } from "@/components/ui/EvmAssetDropdown";
 import { EvmWalletCard } from "@/components/ui/EvmWalletCard";
 import { ZcashLogo } from "@/components/ui/CryptoLogos";
@@ -54,6 +55,8 @@ export default function DirectTipPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [escrowAddress, setEscrowAddress] = useState<string | null>(null);
   const [createdTipId, setCreatedTipId] = useState<string | null>(null);
+  const [confirmedTxid, setConfirmedTxid] = useState<string | null>(null);
+  const [copiedTxid, setCopiedTxid] = useState(false);
 
   // Multi-Currency Cross-Chain & EVM Wallet State
   const [payMethod, setPayMethod] = useState<"zec" | "cross_chain">("zec");
@@ -68,7 +71,7 @@ export default function DirectTipPage() {
   const [showMobileQr, setShowMobileQr] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const { priceUsd: zecPriceUsd } = useZecPrice();
+  const { priceUsd: zecPriceUsd, formatZecToUsd } = useZecPrice();
 
   const selectedToken =
     SUPPORTED_SWAP_TOKENS.find((t) => t.id === selectedTokenId) || SUPPORTED_SWAP_TOKENS[0];
@@ -689,6 +692,49 @@ export default function DirectTipPage() {
                     <strong>{amountZec} ZEC</strong> was received and is safely held in privacy-shielded escrow for <strong>@{userProfile.username}</strong>.
                   </p>
                 </div>
+                {confirmedTxid && (
+                  <div className="p-3 bg-white border border-emerald-200 rounded-2xl space-y-1 text-left shadow-subtle">
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span className="font-bold text-emerald-800">Tx Hash:</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(confirmedTxid);
+                            setCopiedTxid(true);
+                            setTimeout(() => setCopiedTxid(false), 2000);
+                          }}
+                          className="hover:text-emerald-900 text-emerald-700 flex items-center gap-1"
+                        >
+                          {copiedTxid ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedTxid ? "Copied" : "Copy"}</span>
+                        </button>
+                        <a
+                          href={getZcashExplorerUrl(confirmedTxid)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-emerald-900 text-emerald-700 flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          <span>Explorer</span>
+                        </a>
+                      </div>
+                    </div>
+                    <p className="font-mono text-xs text-brown-900 break-all">{confirmedTxid}</p>
+                  </div>
+                )}
+
+                <InvoiceReceiptCard
+                  type="tip"
+                  recipientUsername={userProfile.username}
+                  amountZec={amountZec}
+                  amountUsd={formatZecToUsd(amountZec)}
+                  txid={confirmedTxid || undefined}
+                  escrowAddress={escrowAddress || undefined}
+                  memo={memo}
+                  isAnonymous={isAnonymous}
+                />
+
                 <div className="pt-2">
                   <Link
                     href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
@@ -730,7 +776,10 @@ export default function DirectTipPage() {
                     address={escrowAddress}
                     amountZec={parseFloat(amountZec)}
                     memo={memo || "VeilX Private Tip"}
-                    onPaymentConfirmed={() => setSwapStep("SETTLED")}
+                    onPaymentConfirmed={(txid) => {
+                      if (txid) setConfirmedTxid(txid);
+                      setSwapStep("SETTLED");
+                    }}
                   />
                   </>
                 )}

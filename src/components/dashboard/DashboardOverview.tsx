@@ -222,10 +222,14 @@ export function DashboardOverview({
               minute: "2-digit",
             }) : "Recent";
 
-            const txid = r.paidTxid || undefined;
-            const numericAmount = typeof r.amountZec === "number" ? r.amountZec : parseFloat(r.amountZec) || 0;
             const targetSnapshot = (r.targetUsernameSnapshot || "").toLowerCase();
             const isIncoming = safeUsername ? targetSnapshot === safeUsername : false;
+
+            // Perspective-aware TxID:
+            // - Payer (isIncoming): shows r.paidTxid (deposit into escrow)
+            // - Requester (!isIncoming): shows r.forwardTxid (outflow payout to user's wallet), falling back to r.paidTxid
+            const txid = isIncoming ? (r.paidTxid || r.forwardTxid) : (r.forwardTxid || r.paidTxid);
+            const numericAmount = typeof r.amountZec === "number" ? r.amountZec : parseFloat(r.amountZec) || 0;
 
             newActivity.push({
               id: r._id || r.id,
@@ -258,7 +262,8 @@ export function DashboardOverview({
               minute: "2-digit",
             }) : "Recent";
 
-            const txid = p.paidTxid || undefined;
+            // PayLink creator receives the forward payout:
+            const txid = p.forwardTxid || p.paidTxid || undefined;
             const numericAmount = typeof p.amountZec === "number" ? p.amountZec : parseFloat(p.amountZec) || 0;
 
             newActivity.push({
@@ -811,14 +816,14 @@ export function DashboardOverview({
                   <div className="flex flex-col items-end gap-1.5 shrink-0">
                     <span className="font-mono font-bold text-sm text-brown-950">
                       {isReceivedTip
-                        ? `+${item.amountZec}`
+                        ? `+${formatZecValue(item.amountZec)}`
                         : isPayLink
-                        ? `+${item.amountZec}`
+                        ? `+${formatZecValue(item.amountZec)}`
                         : isIncomingRequest
-                        ? `-${item.amountZec}`
+                        ? `-${formatZecValue(item.amountZec)}`
                         : isOutgoingRequest
-                        ? `+${item.amountZec}`
-                        : `-${item.amountZec}`} ZEC
+                        ? `+${formatZecValue(item.amountZec)}`
+                        : `-${formatZecValue(item.amountZec)}`} ZEC
                     </span>
                     {isReceivedTip && item.status === "FUNDED" ? (
                       <Button
@@ -941,6 +946,16 @@ export function DashboardOverview({
                             ? "Confirming on-chain"
                             : item.type === "received" && item.status === "FUNDING_DETECTED"
                             ? "Incoming (Confirming)"
+                            : item.type === "request" && item.status === "SETTLING"
+                            ? item.isIncoming
+                              ? "Payment Confirming"
+                              : "Incoming (Confirming)"
+                            : item.type === "request" && item.status === "FORWARD_PENDING"
+                            ? "Payout Pending"
+                            : item.type === "request" && item.status === "FULFILLED"
+                            ? item.isIncoming
+                              ? "Paid"
+                              : "Received"
                             : undefined
                         }
                       />

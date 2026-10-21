@@ -72,6 +72,30 @@ export function AppNavbar({ user, onLogout }: AppNavbarProps) {
               }
 
               // C. Requester: request was paid/fulfilled by target
+              if (isRequester && (r.status === "SETTLING" || r.status === "FORWARD_PENDING")) {
+                notifs.push({
+                  id: `req-settling-${r._id || r.id}`,
+                  title: "Payment Confirming On-Chain",
+                  description: `@${r.targetUsernameSnapshot || "User"} sent payment for your ${r.amountZec} ZEC request. Confirming in next block...`,
+                  time: "Confirming",
+                  status: r.status,
+                  type: "request_settling",
+                  link: `/request/${r._id || r.id}`,
+                });
+              }
+
+              if (isTarget && (r.status === "SETTLING" || r.status === "FORWARD_PENDING")) {
+                notifs.push({
+                  id: `req-paying-${r._id || r.id}`,
+                  title: "Payment Processing",
+                  description: `Your payment to @${r.requesterUsernameSnapshot || "User"} has been broadcasted and is confirming on-chain.`,
+                  time: "Confirming",
+                  status: r.status,
+                  type: "request_settling",
+                  link: `/request/${r._id || r.id}`,
+                });
+              }
+
               if (isRequester && r.status === "FULFILLED") {
                 notifs.push({
                   id: `req-paid-${r._id || r.id}`,
@@ -124,13 +148,13 @@ export function AppNavbar({ user, onLogout }: AppNavbarProps) {
         if (paylinksRes.status === "fulfilled") {
           const plData = await paylinksRes.value.json();
           if (plData.success && Array.isArray(plData.paylinks)) {
-            const paidLinks = plData.paylinks.filter((pl: any) => pl.status === "PAID");
+            const paidLinks = plData.paylinks.filter((pl: any) => pl.status === "PAID" || pl.status === "FORWARD_PENDING" || pl.status === "SETTLING");
             paidLinks.slice(0, 3).forEach((pl: any) => {
               notifs.push({
                 id: `pl-${pl._id || pl.id}`,
-                title: "PayLink Paid!",
+                title: pl.status === "PAID" ? "PayLink Paid!" : "PayLink Payment Confirming",
                 description: `"${pl.title}" was settled for ${pl.amountZec} ZEC.`,
-                time: "Settled",
+                time: pl.status === "PAID" ? "Settled" : "Confirming",
                 status: "PAID",
                 type: "paylink",
                 link: `/pay/${pl.slug}`,

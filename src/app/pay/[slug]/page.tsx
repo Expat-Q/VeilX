@@ -48,6 +48,7 @@ export default function PayLinkInvoicePage() {
     escrowDepositAddress?: string;
     status: string;
     paidTxid?: string;
+    forwardTxid?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -409,9 +410,24 @@ export default function PayLinkInvoicePage() {
             <div>
               <h4 className="text-xl font-bold text-brown-950">Invoice Paid!</h4>
               <p className="text-xs text-brown-500 mt-1 max-w-xs mx-auto">
-                {invoice.amountZec} ZEC has been delivered directly to{" "}
-                <strong>@{invoice.creatorUsernameSnapshot}</strong>.
+                Payment sent to <strong>@{invoice.creatorUsernameSnapshot}</strong>.
               </p>
+            </div>
+
+            {/* Payout Breakdown Pill */}
+            <div className="p-3.5 bg-butter-50 border border-butter-200 rounded-2xl space-y-1.5 text-xs text-left shadow-subtle font-mono">
+              <div className="flex justify-between items-center text-brown-600">
+                <span>Amount Paid:</span>
+                <span>{invoice.amountZec} ZEC</span>
+              </div>
+              <div className="flex justify-between items-center text-brown-500 text-[11px]">
+                <span>Zcash Miner Fee:</span>
+                <span>-0.0001 ZEC</span>
+              </div>
+              <div className="flex justify-between items-center pt-1 border-t border-butter-200 text-emerald-800 font-bold text-xs">
+                <span>Net Delivered to Wallet:</span>
+                <span>{Math.max(0, Math.round((invoice.amountZec - 0.0001) * 100000000) / 100000000)} ZEC</span>
+              </div>
             </div>
 
             {/* Downloadable Official Receipt Card */}
@@ -420,7 +436,7 @@ export default function PayLinkInvoicePage() {
               recipientUsername={invoice.creatorUsernameSnapshot}
               amountZec={invoice.amountZec}
               amountUsd={formatZecToUsd(invoice.amountZec)}
-              txid={manualTxid || undefined}
+              txid={invoice.forwardTxid || invoice.paidTxid || submittedTxid || manualTxid || undefined}
               escrowAddress={invoice.escrowDepositAddress || invoice.recipientShieldedUa}
               memo={invoice.title}
             />
