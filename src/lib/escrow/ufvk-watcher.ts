@@ -28,6 +28,14 @@ export interface EscrowVerificationResult {
   actualAmountZec?: number;
 }
 
+// Polyfill global self and addEventListener for Node.js / SSR server runtimes
+if (typeof (globalThis as any).self === "undefined") {
+  (globalThis as any).self = globalThis;
+}
+if (typeof (globalThis as any).self.addEventListener !== "function") {
+  (globalThis as any).self.addEventListener = () => {};
+}
+
 let wasmEngine: any = null;
 let initPromise: Promise<any> | null = null;
 

@@ -28,34 +28,15 @@ function waitForMsgType(target, type) {
   });
 }
 
-waitForMsgType(self, 'wasm_bindgen_worker_init').then(async ({ init, receiver }) => {
-  // # Note 1
-  // Our JS should have been generated in
-  // `[out-dir]/snippets/wasm-bindgen-rayon-[hash]/workerHelpers.js`,
-  // resolve the main module via `../../..`.
-  //
-  // This might need updating if the generated structure changes on wasm-bindgen
-  // side ever in the future, but works well with bundlers today. The whole
-  // point of this crate, after all, is to abstract away unstable features
-  // and temporary bugs so that you don't need to deal with them in your code.
-  //
-  // # Note 2
-  // This could be a regular import, but then some bundlers complain about
-  // circular deps.
-  //
-  // Dynamic import could be cheap if this file was inlined into the parent,
-  // which would require us just using `../../..` in `new Worker` below,
-  // but that doesn't work because wasm-pack unconditionally adds
-  // "sideEffects":false (see below).
-  //
-  // OTOH, even though it can't be inlined, it should be still reasonably
-  // cheap since the requested file is already in cache (it was loaded by
-  // the main thread).
-  const pkg = await import('../../../veilx_wallet.js');
-  await pkg.default(init);
-  postMessage({ type: 'wasm_bindgen_worker_ready' });
-  pkg.wbg_rayon_start_worker(receiver);
-});
+// In Node.js / SSR server environment, `self` is undefined; guard to prevent server crash.
+if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
+  waitForMsgType(self, 'wasm_bindgen_worker_init').then(async ({ init, receiver }) => {
+    const pkg = await import('../../../veilx_wallet.js');
+    await pkg.default(init);
+    postMessage({ type: 'wasm_bindgen_worker_ready' });
+    pkg.wbg_rayon_start_worker(receiver);
+  });
+}
 
 // Note: this is never used, but necessary to prevent a bug in Firefox
 // (https://bugzilla.mozilla.org/show_bug.cgi?id=1702191) where it collects
@@ -79,22 +60,6 @@ export async function startWorkers(module, memory, builder) {
 
   _workers = await Promise.all(
     Array.from({ length: builder.numThreads() }, async () => {
-      // Self-spawn into a new Worker.
-      //
-      // TODO: while `new URL('...', import.meta.url) becomes a semi-standard
-      // way to get asset URLs relative to the module across various bundlers
-      // and browser, ideally we should switch to `import.meta.resolve`
-      // once it becomes a standard.
-      //
-      // Note: we could use `../../..` as the URL here to inline workerHelpers.js
-      // into the parent entry instead of creating another split point -
-      // this would be preferable from optimization perspective -
-      // however, Webpack then eliminates all message handler code
-      // because wasm-pack produces "sideEffects":false in package.json
-      // unconditionally.
-      //
-      // The only way to work around that is to have side effect code
-      // in an entry point such as Worker file itself.
       const worker = new Worker(new URL('./workerHelpers.js', import.meta.url), {
         type: 'module'
       });
