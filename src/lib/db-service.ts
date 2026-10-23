@@ -37,7 +37,11 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
  */
 async function isTxidAlreadyUsed(txid: string, excludeId?: string): Promise<boolean> {
   const cleanTxid = txid.trim();
-  if (memoryStore.usedTxids.has(cleanTxid)) {
+
+  // Only check memoryStore if we have no excludeId to compare against.
+  // When re-verifying the same tip/request (e.g. FUNDING_DETECTED -> FUNDED reconciliation),
+  // the txid is legitimately already in the set for THIS record, so skip the blind cache check.
+  if (!excludeId && memoryStore.usedTxids.has(cleanTxid)) {
     return true;
   }
 
@@ -250,7 +254,8 @@ export const dbService = {
       isAnonymous: params.isAnonymous ?? true,
       memo: params.memo,
       escrowAddress: escrow.unifiedAddress,
-      escrowDepositAddress: transparentEscrow,
+      escrowDepositAddress: escrow.unifiedAddress,
+      transparentDepositAddress: transparentEscrow,
       diversifierIndex: escrow.diversifierIndex,
       status: "CREATED" as const,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
@@ -955,8 +960,9 @@ export const dbService = {
       amountZec: params.amountZec,
       memo: params.memo,
       recipientShieldedUa: params.recipientShieldedUa,
-      escrowDepositAddress: transparentEscrow,
+      escrowDepositAddress: escrow.unifiedAddress,
       shieldedEscrowAddress: escrow.unifiedAddress,
+      transparentEscrowAddress: transparentEscrow,
       diversifierIndex: escrow.diversifierIndex,
       status: "PENDING" as const,
       createdAt: new Date(),
@@ -1074,75 +1080,12 @@ export const dbService = {
       memoryStore.usedTxids.add(cleanTxid);
     }
 
-    // If transaction has 0 confirmations (in mempool), stop here and return SETTLING status.
-    // The client or background worker will finalize to FULFILLED once block 1 is mined!
-    if (isMempool) {
-      return lockedRequest;
-    }
-
-    // 5. Calculate net payout based on min(nominal, actualReceived) to prevent underpayment deficit (HIGH-01)
-    const MINING_FEE_ZEC = 0.0001;
-    const actualReceived = typeof verification.actualAmountZec === "number"
-      ? Math.min(request.amountZec, verification.actualAmountZec)
-      : request.amountZec;
-    const netPayoutAmount = Math.max(0, Math.round((actualReceived - MINING_FEE_ZEC) * 100000000) / 100000000);
-
-    let finalStatus: "FULFILLED" | "FORWARD_PENDING" = "FULFILLED";
-    let forwardTxid: string | undefined;
-    let forwardOpid: string | undefined;
-    let payoutError: string | undefined;
-
-    if (netPayoutAmount > 0) {
-      checkPayoutCircuitBreaker();
-      try {
-        const forwardResult = await zallet.sendShieldedPayout(
-          request.recipientShieldedUa,
-          netPayoutAmount,
-          request.memo || "VeilX Payment Request Fulfilled",
-          undefined,
-          cleanTxid
-        );
-        if (forwardResult.txid && !forwardResult.opid) {
-          forwardTxid = forwardResult.txid;
-          finalStatus = "FULFILLED";
-        } else if (forwardResult.opid) {
-          forwardOpid = forwardResult.opid;
-          finalStatus = "FORWARD_PENDING";
-        } else if (forwardResult.txid) {
-          forwardTxid = forwardResult.txid;
-          finalStatus = "FULFILLED";
-        }
-      } catch (err: any) {
-        console.warn(`[Request Forwarder] Payout forwarding deferred to background queue for request ${id}:`, err?.message || err);
-        finalStatus = "FORWARD_PENDING";
-        payoutError = (err?.message || String(err)).replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
-      }
-    }
-
-    // 6. Transition to final status (FULFILLED or FORWARD_PENDING)
-    if (isMongo) {
-      const finalized = await PaymentRequest.findByIdAndUpdate(
-        id,
-        {
-          $set: {
-            status: finalStatus,
-            forwardTxid,
-            forwardOpid,
-            payoutError,
-          },
-        },
-        { new: true }
-      ).lean();
-      memoryStore.usedTxids.add(cleanTxid);
-      return finalized;
-    } else {
-      lockedRequest.status = finalStatus;
-      lockedRequest.forwardTxid = forwardTxid;
-      lockedRequest.forwardOpid = forwardOpid;
-      lockedRequest.payoutError = payoutError;
-      memoryStore.usedTxids.add(cleanTxid);
-      return lockedRequest;
-    }
+    // In PCZT shielded escrow architecture, once the payment transaction is verified
+    // on-chain and recorded, the record remains in SETTLING status.
+    // The payer's client (Option B auto-forwarder) synthesizes the proof via PCZT
+    // once block 1 is mined. If the payer tab is closed early, the creator can claim
+    // directly from their dashboard.
+    return lockedRequest;
   },
 
   // --- PAYMENT LINKS ---
@@ -1210,8 +1153,9 @@ export const dbService = {
       title: params.title,
       amountZec: params.amountZec,
       recipientShieldedUa: params.recipientShieldedUa,
-      escrowDepositAddress: transparentEscrow,
+      escrowDepositAddress: escrow.unifiedAddress,
       shieldedEscrowAddress: escrow.unifiedAddress,
+      transparentEscrowAddress: transparentEscrow,
       diversifierIndex: escrow.diversifierIndex,
       status: "UNPAID" as const,
       createdAt: new Date(),
@@ -1321,73 +1265,12 @@ export const dbService = {
       memoryStore.usedTxids.add(cleanTxid);
     }
 
-    // If transaction has 0 confirmations (in mempool), stop here and return SETTLING status.
-    // The client or background worker will finalize to PAID once block 1 is mined!
-    if (isMempool) {
-      return lockedLink;
-    }
-
-    // 5. Calculate net funds from Escrow to creator's personal shielded address (deficit-protected)
-    const MINING_FEE_ZEC = 0.0001;
-    const actualReceived = typeof verification.actualAmountZec === "number"
-      ? Math.min(link.amountZec, verification.actualAmountZec)
-      : link.amountZec;
-    const netPayoutAmount = Math.max(0, Math.round((actualReceived - MINING_FEE_ZEC) * 100000000) / 100000000);
-
-    let finalStatus: "PAID" | "FORWARD_PENDING" = "PAID";
-    let forwardTxid: string | undefined;
-    let forwardOpid: string | undefined;
-    let payoutError: string | undefined;
-
-    if (netPayoutAmount > 0) {
-      checkPayoutCircuitBreaker();
-      try {
-        const forwardResult = await zallet.sendShieldedPayout(
-          link.recipientShieldedUa,
-          netPayoutAmount,
-          `VeilX Invoice: ${link.title || link.slug}`
-        );
-        if (forwardResult.txid && !forwardResult.opid) {
-          forwardTxid = forwardResult.txid;
-          finalStatus = "PAID";
-        } else if (forwardResult.opid) {
-          forwardOpid = forwardResult.opid;
-          finalStatus = "FORWARD_PENDING";
-        } else if (forwardResult.txid) {
-          forwardTxid = forwardResult.txid;
-          finalStatus = "PAID";
-        }
-      } catch (err: any) {
-        console.warn(`[Invoice Forwarder] Payout forwarding deferred to background queue for paylink ${slug}:`, err?.message || err);
-        finalStatus = "FORWARD_PENDING";
-        payoutError = (err?.message || String(err)).replace(/t1[a-zA-Z0-9]{33}/g, "shielded escrow vault");
-      }
-    }
-
-    // 6. Transition to final status (PAID or FORWARD_PENDING)
-    if (isMongo) {
-      const finalized = await PaymentLink.findOneAndUpdate(
-        { slug },
-        {
-          $set: {
-            status: finalStatus,
-            forwardTxid,
-            forwardOpid,
-            payoutError,
-          },
-        },
-        { new: true }
-      ).lean();
-      memoryStore.usedTxids.add(cleanTxid);
-      return finalized;
-    } else {
-      lockedLink.status = finalStatus;
-      lockedLink.forwardTxid = forwardTxid;
-      lockedLink.forwardOpid = forwardOpid;
-      lockedLink.payoutError = payoutError;
-      memoryStore.usedTxids.add(cleanTxid);
-      return lockedLink;
-    }
+    // In PCZT shielded escrow architecture, once the payment transaction is verified
+    // on-chain and recorded, the record remains in SETTLING status.
+    // The payer's client (Option B auto-forwarder) synthesizes the proof via PCZT
+    // once block 1 is mined. If the payer tab is closed early, the creator can claim
+    // directly from their dashboard.
+    return lockedLink;
   },
 
   /**

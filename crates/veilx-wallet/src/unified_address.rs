@@ -35,18 +35,18 @@ pub fn encode_unified_address(
     let mut items = Vec::new();
 
     if let Some(orch) = orchard {
-        items.push(Receiver::Orchard(*orch));
+        items.push(zcash_address::unified::Uitem::Data(Receiver::Orchard(*orch)));
     }
 
     if let Some(pkh) = p2pkh {
-        items.push(Receiver::P2pkh(*pkh));
+        items.push(zcash_address::unified::Uitem::Data(Receiver::P2pkh(*pkh)));
     }
 
     if items.is_empty() {
         return Err("Cannot encode empty Unified Address (no receivers provided).".to_string());
     }
 
-    let addr = Address::try_from_items(items)
+    let addr = Address::try_from_items(zcash_address::unified::Revision::R0, items)
         .map_err(|e| format!("Invalid Unified Address items: {:?}", e))?;
 
     Ok(addr.encode(&net))
@@ -56,7 +56,7 @@ pub fn encode_unified_address(
 pub fn decode_unified_address(ua: &str) -> Result<UnifiedAddressReceivers, String> {
     use zcash_address::unified::{Address, Container, Encoding, Receiver};
 
-    let (_net, addr) = Address::decode(ua)
+    let (_net, _rev, addr) = Address::decode(ua)
         .map_err(|e| format!("Failed to decode Unified Address: {:?}", e))?;
 
     let mut p2pkh = None;
@@ -210,7 +210,7 @@ mod tests {
     fn test_official_decode_noir() {
         use zcash_address::unified::{Address, Container, Encoding, Receiver};
         let ua = "u174uudp7hcd2fz2qslsmsxrh8zt34ctq9fm500lgujgujfeyy86tudjyc8p2uthyta26q4pexj04sv5j86kmur53y03wwcd4x9h588cnv06lzatytryhtdpmceuq297n6q7ptxk9ptnllmq67u9fc5djmj8uz2sas0a4ncvkx3g6a7fjz";
-        let (_net, addr) = Address::decode(ua).expect("Failed to decode Noir UA");
+        let (_net, _rev, addr) = Address::decode(ua).expect("Failed to decode Noir UA");
         for receiver in addr.items() {
             match receiver {
                 Receiver::P2pkh(data) => println!("Found P2PKH: {:?}", hex::encode(data)),

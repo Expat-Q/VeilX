@@ -122,6 +122,18 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const shouldProtect = isFundingTip || (step === 4 && (fundingNotice !== null || payMethod === "zec" || isSendingWalletTx || swapStep === "PROMPTING" || swapStep === "CONVERTING"));
+    if (!shouldProtect) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "Transaction is currently being confirmed on the Zcash network. Leaving now may disrupt the process.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isFundingTip, step, fundingNotice, payMethod, isSendingWalletTx, swapStep]);
   const { priceUsd: zecPriceUsd, formatZecToUsd } = useZecPrice();
 
   const selectedToken =
@@ -440,8 +452,8 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
           if (onSuccess) onSuccess(data.tip);
           setStep(5);
         } else {
-          // Status is FUNDING_DETECTED (in mempool, awaiting block 1 confirmation)
-          setFundingNotice("Payment broadcasted & detected on blockchain! Confirming in next block...");
+          // Status is FUNDING_DETECTED (in mempool, awaiting confirmation)
+          setFundingNotice("Payment detected! Confirming on Zcash network...");
         }
       } else {
         setErrorNotice(data.error || "Failed to confirm on-chain tip funding.");
@@ -461,13 +473,13 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
         const res = await fetch(`/api/tips/${createdTipId}`);
         const data = await res.json();
         if (res.ok && data.success && data.tip) {
-          if (data.tip.status === "FUNDED") {
+          if (data.tip.status === "FUNDED" || (data.tip.status === "FUNDING_DETECTED" && data.tip.confirmations >= 1)) {
             setFundingNotice(null);
             setConfirmedTxid(data.tip.fundingTxid);
             if (onSuccess) onSuccess(data.tip);
             setStep(5);
           } else if (data.tip.status === "FUNDING_DETECTED") {
-            setFundingNotice("Payment broadcasted & detected on blockchain! Confirming in next block...");
+            setFundingNotice("Payment detected! Confirming on Zcash network...");
           }
         }
       } catch (e) {
@@ -1406,11 +1418,11 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
                     <div>
                       <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold mb-2">
                         <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                        <span>Payment Broadcasted on Zcash Blockchain</span>
+                        <span>Payment Detected</span>
                       </div>
-                      <h4 className="text-lg font-bold text-brown-950">Awaiting 1 Block Confirmation</h4>
+                      <h4 className="text-lg font-bold text-brown-950">Confirming on Zcash Network...</h4>
                       <p className="text-xs text-brown-600 mt-1 max-w-sm mx-auto leading-relaxed">
-                        Your shielded tip has been detected in the mempool! Zcash consensus requires 1 confirmed block to seal your note into the Orchard Merkle tree before private deposit for @{selectedUser.username}.
+                        Payment detected! Confirming on Zcash network... Your transfer will be finalized automatically once confirmed on-chain.
                       </p>
                     </div>
 
@@ -1462,7 +1474,7 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
                         </span>
                       </div>
                       <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl">
-                        <span className="text-[10px] uppercase font-bold text-amber-700 block">2. On-Chain Seal</span>
+                        <span className="text-[10px] uppercase font-bold text-amber-700 block">2. Confirming</span>
                         <span className="text-xs font-bold text-amber-950 flex items-center justify-center gap-1 mt-0.5">
                           <Loader2 className="w-3 h-3 animate-spin text-amber-700" /> Confirming
                         </span>
@@ -1473,18 +1485,19 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
                       </div>
                     </div>
 
-                    <p className="text-[11px] text-brown-500 italic">
-                      This modal will automatically transition once block 1 is sealed. You can safely close or remain on this screen.
-                    </p>
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-center gap-2 text-xs text-amber-900 font-medium animate-pulse">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>⚡ Please keep this tab open until the transaction is confirmed on-chain.</span>
+                    </div>
                   </div>
                 ) : (
                   <>
-                    <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl flex items-start gap-2.5 text-xs text-amber-950 text-left mb-3 shadow-subtle">
-                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-950 text-left mb-3 shadow-subtle">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                       <div className="space-y-0.5">
-                        <span className="font-bold">⚠️ Shielded Inflow Required (100% Tipper Privacy)</span>
-                        <p className="text-[11px] text-amber-900 leading-relaxed">
-                          You must send this payment from your <strong>shielded balance</strong> in Zashi, YWallet, or Noir. Transactions from transparent balances (<code className="font-mono font-bold text-amber-950">t1...</code>) are strictly rejected to prevent privacy leakage.
+                        <span className="font-bold">🛡️ 100% Shielded Inflow (Total Tipper Privacy)</span>
+                        <p className="text-[11px] text-emerald-900 leading-relaxed">
+                          Send this payment from your wallet&apos;s shielded balance in Zashi or YWallet for complete on-chain privacy.
                         </p>
                       </div>
                     </div>

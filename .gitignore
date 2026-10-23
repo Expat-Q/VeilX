@@ -85,6 +85,20 @@ Thumbs.db
 
 # Scratch & Temporary documentation files
 NexPlay*
+*.md
+!README.md
+!extensions/**/README.md
+*.hex
+
+# Temporary node testbed scripts
+tests/check_*.ts
+tests/compare_*.ts
+tests/dump_*.ts
+tests/find_*.ts
+tests/inspect_*.ts
+tests/parse_*.ts
+tests/reset_*.ts
+tests/test_server_wire.ts
 
 # Extension build outputs & large binary archives (>50MB)
 /extensions/**/dist/

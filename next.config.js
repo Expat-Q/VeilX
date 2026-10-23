@@ -19,6 +19,32 @@ const nextConfig = {
       },
     ],
   },
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Cross-Origin-Opener-Policy',
+            value: 'same-origin',
+          },
+          {
+            key: 'Cross-Origin-Embedder-Policy',
+            value: 'credentialless',
+          },
+        ],
+      },
+      {
+        source: '/wasm/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     // 1. If running on Render itself, do NOT rewrite (prevents proxying to self in an infinite loop)
     if (process.env.RENDER === "true" || process.env.IS_RENDER === "true") {
@@ -32,6 +58,10 @@ const nextConfig = {
     const backendUrl = rawBackendUrl.trim().replace(/\/+$/, "");
 
     return [
+      {
+        source: '/api/escrow/:path*',
+        destination: `${backendUrl}/api/escrow/:path*`,
+      },
       {
         source: '/api/cron/:path*',
         destination: `${backendUrl}/api/cron/:path*`,

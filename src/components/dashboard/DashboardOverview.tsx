@@ -26,9 +26,12 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { XLogo } from "@/components/ui/XLogo";
 import { formatUsd, formatZecValue, truncateAddress, getZcashExplorerUrl } from "@/lib/utils";
 import { useZecPrice } from "@/lib/price-service";
+import { prewarmProverInBackground } from "@/lib/pczt/pczt-client-prover";
 
 export interface DashboardOverviewProps {
   user: {
+    id?: string;
+    userId?: string;
     name?: string;
     username?: string;
     profileImageUrl?: string;
@@ -40,7 +43,6 @@ export interface DashboardOverviewProps {
   onOpenRequest: () => void;
   onOpenPayLink: () => void;
   onOpenClaim: (tip: any) => void;
-  onOpenBatchClaim?: (tips: any[]) => void;
   onLogout?: () => void;
 }
 
@@ -50,7 +52,6 @@ export function DashboardOverview({
   onOpenRequest,
   onOpenPayLink,
   onOpenClaim,
-  onOpenBatchClaim,
   onLogout,
 }: DashboardOverviewProps) {
   const [activeFilter, setActiveFilter] = useState<"all" | "received" | "sent">("all");
@@ -67,6 +68,7 @@ export function DashboardOverview({
   const { priceUsd, change24h, formatZecToUsd, refetchPrice } = useZecPrice();
 
   const safeUsername = (user?.username || "").toLowerCase();
+  const safeUserId = user?.userId || user?.id || "";
   const safeName = user?.name || user?.username || "Creator";
 
   const handleCopyTxid = (id: string, txid: string) => {
@@ -179,7 +181,7 @@ export function DashboardOverview({
           tipsData.tips.forEach((t: any) => {
             const senderSnapshot = (t.senderUsernameSnapshot || "").toLowerCase();
             const recipientSnapshot = (t.recipientUsernameSnapshot || "").toLowerCase();
-            const isUserSender = safeUsername ? senderSnapshot === safeUsername : false;
+            const isUserSender = (safeUsername && senderSnapshot === safeUsername) || (safeUserId && t.senderUserId && String(t.senderUserId) === String(safeUserId));
             const isUserRecipient = safeUsername ? recipientSnapshot === safeUsername : false;
             
             if (isUserSender || isUserRecipient) {
@@ -203,6 +205,11 @@ export function DashboardOverview({
                 memo: t.memo,
                 status: t.status,
                 txid,
+                paidTxid: t.fundingTxid,
+                forwardTxid: t.claimTxid,
+                depositTxid: t.fundingTxid,
+                outflowTxid: t.claimTxid,
+                recipientShieldedUa: t.recipientShieldedAddress,
                 date: createdDate,
                 rawDate: t.createdAt ? new Date(t.createdAt).getTime() : 0,
               });
@@ -226,10 +233,14 @@ export function DashboardOverview({
             const targetSnapshot = (r.targetUsernameSnapshot || "").toLowerCase();
             const isIncoming = safeUsername ? targetSnapshot === safeUsername : false;
 
+            const depositTxid = r.paidTxid || undefined;
+            const outflowTxid = r.forwardTxid || undefined;
+            const payoutError = r.payoutError || undefined;
+
             // Perspective-aware TxID:
             // - Payer (isIncoming): shows r.paidTxid (deposit into escrow)
             // - Requester (!isIncoming): shows r.forwardTxid (outflow payout to user's wallet), falling back to r.paidTxid
-            const txid = isIncoming ? (r.paidTxid || r.forwardTxid) : (r.forwardTxid || r.paidTxid);
+            const txid = isIncoming ? (depositTxid || outflowTxid) : (outflowTxid || depositTxid);
             const numericAmount = typeof r.amountZec === "number" ? r.amountZec : parseFloat(r.amountZec) || 0;
 
             newActivity.push({
@@ -240,10 +251,16 @@ export function DashboardOverview({
               targetHandle: r.targetUsernameSnapshot,
               amountZec: numericAmount,
               memo: r.memo,
+              recipientShieldedUa: r.recipientShieldedUa,
               status: r.status,
               cancelledByRole: r.cancelledByRole,
               cancelledByUsername: r.cancelledByUsername,
               txid,
+              paidTxid: depositTxid,
+              forwardTxid: outflowTxid,
+              depositTxid,
+              outflowTxid,
+              payoutError,
               date: createdDate,
               rawDate: r.createdAt ? new Date(r.createdAt).getTime() : 0,
             });
@@ -263,8 +280,12 @@ export function DashboardOverview({
               minute: "2-digit",
             }) : "Recent";
 
+            const depositTxid = p.paidTxid || undefined;
+            const outflowTxid = p.forwardTxid || undefined;
+            const payoutError = p.payoutError || undefined;
+
             // PayLink creator receives the forward payout:
-            const txid = p.forwardTxid || p.paidTxid || undefined;
+            const txid = outflowTxid || depositTxid || undefined;
             const numericAmount = typeof p.amountZec === "number" ? p.amountZec : parseFloat(p.amountZec) || 0;
 
             newActivity.push({
@@ -273,8 +294,14 @@ export function DashboardOverview({
               slug: p.slug,
               title: p.title,
               amountZec: numericAmount,
+              recipientShieldedUa: p.recipientShieldedUa,
               status: p.status || "UNPAID",
               txid,
+              paidTxid: depositTxid,
+              forwardTxid: outflowTxid,
+              depositTxid,
+              outflowTxid,
+              payoutError,
               date: createdDate,
               rawDate: p.createdAt ? new Date(p.createdAt).getTime() : 0,
             });
@@ -295,33 +322,92 @@ export function DashboardOverview({
   // Initial load and live polling
   useEffect(() => {
     fetchLiveActivity();
+    // Pre-warm the Orchard Halo 2 prover in Web Worker during dashboard idle time
+    prewarmProverInBackground();
     const interval = setInterval(fetchLiveActivity, 8000);
     return () => clearInterval(interval);
   }, [fetchLiveActivity]);
 
-  const claimableTips = activity.filter((a) => a.type === "received" && a.status === "FUNDED");
+  const isItemReadyToDisburse = (a: any) => {
+    // 1. Tips received in escrow
+    if (a.type === "received" && a.status === "FUNDED") return true;
+    // 2. PayLinks awaiting forward / disbursement
+    if (a.type === "paylink") {
+      if (a.paidTxid && !a.forwardTxid) return true;
+      if (a.status === "SETTLING" || a.status === "FORWARD_PENDING" || Boolean(a.payoutError)) return true;
+    }
+    // 3. Outgoing requests fulfilled by target awaiting disbursement to user
+    if (a.type === "request" && !a.isIncoming) {
+      if (a.paidTxid && !a.forwardTxid) return true;
+      if (a.status === "SETTLING" || a.status === "FORWARD_PENDING" || Boolean(a.payoutError)) return true;
+    }
+    return false;
+  };
+
+  const allClaimable = activity.filter(isItemReadyToDisburse);
+  const pendingTips = allClaimable;
+
   const syncingTips = activity.filter(
     (a) => a.type === "received" && (a.status === "CLAIMING" || a.status === "PENDING_VERIFICATION" || a.status === "FUNDING_DETECTED")
   );
-  const pendingTips = claimableTips;
-  const pendingIncomingTotal = [...claimableTips, ...syncingTips].reduce(
+
+  const pendingIncomingTotal = allClaimable.reduce(
     (acc, curr) => acc + (typeof curr.amountZec === "number" ? curr.amountZec : parseFloat(curr.amountZec) || 0),
     0
   );
   const safePendingTotal = typeof pendingIncomingTotal === "number" && !isNaN(pendingIncomingTotal) ? pendingIncomingTotal : 0;
 
-  const claimedTips = activity.filter((a) => a.type === "received" && a.status === "CLAIMED");
-  const totalClaimedZec = claimedTips.reduce(
+  const isItemSettledAndDisbursed = (a: any) => {
+    if (a.type === "received" && a.status === "CLAIMED") return true;
+    if (a.type === "paylink" && a.paidTxid && a.forwardTxid) return true;
+    if (a.type === "request" && !a.isIncoming && a.paidTxid && a.forwardTxid) return true;
+    return false;
+  };
+
+  const claimedItems = activity.filter(isItemSettledAndDisbursed);
+  const totalClaimedZec = claimedItems.reduce(
     (acc, curr) => acc + (typeof curr.amountZec === "number" ? curr.amountZec : parseFloat(curr.amountZec) || 0),
     0
   );
   const safeClaimedTotal = typeof totalClaimedZec === "number" && !isNaN(totalClaimedZec) ? totalClaimedZec : 0;
 
+  // Calculate Total Sent / Outflow (Tips sent + Payment Requests fulfilled/paid)
+  const isItemSentOrPaid = (a: any) => {
+    // 1. Tips sent by the user (must be at least funded in escrow or claimed)
+    if (a.type === "sent") {
+      return a.status === "FUNDED" || a.status === "CLAIMED" || a.status === "CLAIMING" || a.status === "FUNDING_DETECTED";
+    }
+    // 2. Incoming requests paid by the user (target has paid/broadcasted)
+    if (a.type === "request" && a.isIncoming) {
+      return a.status === "FULFILLED" || a.status === "FORWARD_PENDING" || a.status === "SETTLING" || Boolean(a.paidTxid);
+    }
+    return false;
+  };
+
+  const sentItems = activity.filter(isItemSentOrPaid);
+  const totalSentZec = sentItems.reduce(
+    (acc, curr) => acc + (typeof curr.amountZec === "number" ? curr.amountZec : parseFloat(curr.amountZec) || 0),
+    0
+  );
+  const safeSentTotal = typeof totalSentZec === "number" && !isNaN(totalSentZec) ? totalSentZec : 0;
+
   const handleTriggerClaim = () => {
-    if (pendingTips.length > 1 && onOpenBatchClaim) {
-      onOpenBatchClaim(pendingTips);
-    } else if (pendingTips.length > 0) {
-      onOpenClaim(pendingTips[0]);
+    if (pendingTips.length > 0) {
+      const item = pendingTips[0];
+      onOpenClaim({
+        id: item.id,
+        slug: item.slug,
+        title: item.title,
+        type: item.type,
+        amountZec: item.amountZec,
+        memo: item.title || item.memo,
+        isAnonymous: item.isAnonymous || false,
+        recipientShieldedUa: item.recipientShieldedUa,
+        paidTxid: item.paidTxid,
+        forwardTxid: item.forwardTxid,
+        depositTxid: item.depositTxid || item.paidTxid,
+        payoutError: item.payoutError,
+      });
     }
   };
 
@@ -393,27 +479,17 @@ export function DashboardOverview({
               </p>
               <p className="text-xs font-medium text-brown-500">
                 ≈ {formatZecToUsd(safePendingTotal)} USD
-                {syncingTips.length > 0 && claimableTips.length === 0 && (
+                {syncingTips.length > 0 && allClaimable.length === 0 && (
                   <span className="block text-amber-600 font-semibold mt-1">
-                    ({syncingTips.length} tip currently syncing escrow payout...)
+                    ({syncingTips.length} transaction currently syncing escrow payout...)
                   </span>
                 )}
               </p>
-              {safeClaimedTotal > 0 && (
-                <div className="pt-1.5 flex items-center justify-center">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-butter-50 border border-butter-200 rounded-full text-[11px] font-medium text-brown-700 shadow-subtle">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <span>
-                      Total Claimed: <strong className="font-mono font-bold text-brown-900">{formatZecValue(safeClaimedTotal)} ZEC</strong> ({claimedTips.length} {claimedTips.length === 1 ? "tip" : "tips"})
-                    </span>
-                  </div>
-                </div>
-              )}
             </>
           ) : safeClaimedTotal > 0 ? (
             <>
               <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-emerald-700">
-                Total Shielded Tips Claimed
+                Total Shielded Disbursed
               </p>
               <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
                 {formatZecValue(safeClaimedTotal)} <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
@@ -421,12 +497,6 @@ export function DashboardOverview({
               <p className="text-xs font-medium text-brown-500">
                 ≈ {formatZecToUsd(safeClaimedTotal)} USD
               </p>
-              <div className="pt-1.5 flex items-center justify-center">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 rounded-full text-[11px] font-medium text-emerald-800 shadow-subtle">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>All {claimedTips.length} {claimedTips.length === 1 ? "tip" : "tips"} claimed to self-custodial wallet ✓</span>
-                </div>
-              </div>
             </>
           ) : (
             <>
@@ -439,13 +509,28 @@ export function DashboardOverview({
               <p className="text-xs font-medium text-brown-500">
                 ≈ $0.00 USD
               </p>
-              <div className="pt-1.5 flex items-center justify-center">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-butter-50 border border-butter-200 rounded-full text-[11px] font-medium text-brown-600 shadow-subtle">
-                  <span>Share your tip link to receive private ZEC tips directly</span>
-                </div>
-              </div>
             </>
           )}
+
+          {/* Minimalist Inflow & Outflow Ledger Bar */}
+          <div className="pt-2 flex items-center justify-center">
+            <div className="inline-flex items-center gap-3 px-3.5 py-1.5 bg-butter-50/80 border border-butter-200/90 rounded-full text-xs shadow-subtle divide-x divide-butter-300">
+              <div className="flex items-center gap-1.5 text-emerald-800">
+                <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="text-[11px] font-semibold text-brown-600">Received:</span>
+                <span className="font-mono font-bold text-emerald-950">
+                  +{formatZecValue(safeClaimedTotal + safePendingTotal)} ZEC
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 pl-3 text-rose-800">
+                <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
+                <span className="text-[11px] font-semibold text-brown-600">Sent:</span>
+                <span className="font-mono font-bold text-rose-950">
+                  -{formatZecValue(safeSentTotal)} ZEC
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Claim All Banner Pill if user has pending tips, else Share Link Banner */}
@@ -457,7 +542,7 @@ export function DashboardOverview({
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-bold text-emerald-950 truncate">
-                  {pendingTips.length === 1 ? "1 Tip Waiting in Escrow" : `${pendingTips.length} Tips Waiting in Escrow`}
+                  {pendingTips.length === 1 ? "1 Payment Ready to Disburse" : `${pendingTips.length} Payments Ready to Disburse`}
                 </p>
                 <p className="text-[11px] text-emerald-700 font-mono">
                   {formatZecValue(safePendingTotal)} ZEC ready to claim
@@ -469,7 +554,7 @@ export function DashboardOverview({
               onClick={handleTriggerClaim}
               className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-subtle transition-all shrink-0 active:scale-95 flex items-center gap-1.5"
             >
-              <span>{pendingTips.length > 1 ? "⚡ Claim All" : "Claim"}</span>
+              <span>Claim</span>
               <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -772,16 +857,19 @@ export function DashboardOverview({
                             </a>
                           </div>
                         )}
+                        {/* Clean Perspective-Aware Transaction Hash Link */}
                         {item.txid && (
-                          <div className="inline-flex items-center gap-1 font-mono text-[10px] bg-butter-100/80 border border-butter-200/80 px-1.5 py-0.5 rounded-md text-brown-700">
-                            <span title={item.txid}>{truncateAddress(item.txid, 6, 6)}</span>
+                          <div className="inline-flex items-center gap-1 font-mono text-[10px] bg-butter-100/90 border border-butter-200 px-2 py-0.5 rounded-full text-brown-700 shadow-subtle shrink-0">
+                            <span title={item.txid} className="whitespace-nowrap font-medium">
+                              Tx: {truncateAddress(item.txid, 4, 4)}
+                            </span>
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleCopyTxid(item.id, item.txid);
                               }}
-                              className="p-0.5 hover:bg-butter-200 rounded text-brown-500 hover:text-brown-900 transition-colors"
+                              className="p-0.5 hover:bg-butter-200 rounded text-brown-500 hover:text-brown-900 transition-colors cursor-pointer"
                               title="Copy Transaction Hash"
                             >
                               {copiedTxidMap[item.id] ? (
@@ -802,6 +890,16 @@ export function DashboardOverview({
                             </a>
                           </div>
                         )}
+
+                        {/* Payout Pending alert chip */}
+                        {item.payoutError && (
+                          <span
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded-md"
+                            title={item.payoutError}
+                          >
+                            <span>⚠️ Payout Pending</span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -818,29 +916,95 @@ export function DashboardOverview({
                         ? `+${formatZecValue(item.amountZec)}`
                         : `-${formatZecValue(item.amountZec)}`} ZEC
                     </span>
-                    {isReceivedTip && item.status === "FUNDED" ? (
-                      <Button
-                        onClick={() => onOpenClaim(item)}
-                        size="sm"
-                        variant="primary"
-                        className="h-7 px-3 text-[11px] font-bold shadow-subtle"
-                      >
-                        Claim
-                      </Button>
-                    ) : isReceivedTip && item.status === "PENDING_VERIFICATION" ? (
-                      <div className="flex items-center gap-1.5">
-                        <Button
-                          onClick={() => onOpenClaim(item)}
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 px-2.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200"
-                        >
-                          Retry Claim
-                        </Button>
+
+                    {/* Action & Status Classification */}
+                    {isPayLink ? (
+                      (item.paidTxid && !item.forwardTxid) ||
+                      item.status === "SETTLING" ||
+                      item.status === "FORWARD_PENDING" ||
+                      item.payoutError ? (
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            onClick={() =>
+                              onOpenClaim({
+                                id: item.id,
+                                slug: item.slug,
+                                title: item.title,
+                                type: item.type,
+                                amountZec: item.amountZec,
+                                memo: item.title,
+                                isAnonymous: false,
+                                recipientShieldedUa: item.recipientShieldedUa,
+                                paidTxid: item.paidTxid,
+                                forwardTxid: item.forwardTxid,
+                                depositTxid: item.paidTxid,
+                                payoutError: item.payoutError,
+                              })
+                            }
+                            size="sm"
+                            variant="primary"
+                            className="h-7 px-3 text-[11px] font-bold shadow-subtle bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                          >
+                            Claim
+                          </Button>
+                          <StatusBadge status="READY_TO_DISBURSE" />
+                        </div>
+                      ) : item.paidTxid && item.forwardTxid ? (
+                        <StatusBadge status="SETTLED" customLabel="Disbursed" />
+                      ) : (
                         <StatusBadge status={item.status} />
-                      </div>
-                    ) : item.type === "request" && item.status === "PENDING" ? (
-                      item.isIncoming ? (
+                      )
+                    ) : isOutgoingRequest ? (
+                      item.status === "PENDING" ? (
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            onClick={() => handleCancelRequest(item.id)}
+                            size="sm"
+                            variant="ghost"
+                            disabled={isActionLoadingMap[item.id]}
+                            className="h-7 px-2.5 text-[11px] font-semibold text-brown-600 hover:text-rose-700 hover:bg-rose-50 border border-butter-300"
+                          >
+                            {isActionLoadingMap[item.id] ? "Cancelling..." : "Cancel"}
+                          </Button>
+                          <StatusBadge status={item.status} />
+                        </div>
+                      ) : item.status === "CANCELLED" ? (
+                        <StatusBadge status="CANCELLED" />
+                      ) : (item.paidTxid && !item.forwardTxid) ||
+                        item.status === "SETTLING" ||
+                        item.status === "FORWARD_PENDING" ||
+                        item.payoutError ? (
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            onClick={() =>
+                              onOpenClaim({
+                                id: item.id,
+                                type: item.type,
+                                amountZec: item.amountZec,
+                                memo: item.memo,
+                                isAnonymous: false,
+                                recipientShieldedUa: item.recipientShieldedUa,
+                                paidTxid: item.paidTxid,
+                                forwardTxid: item.forwardTxid,
+                                depositTxid: item.paidTxid,
+                                payoutError: item.payoutError,
+                              })
+                            }
+                            size="sm"
+                            variant="primary"
+                            className="h-7 px-3 text-[11px] font-bold shadow-subtle bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                          >
+                            Claim
+                          </Button>
+                          <StatusBadge status="READY_TO_DISBURSE" />
+                        </div>
+                      ) : item.paidTxid && item.forwardTxid ? (
+                        <StatusBadge status="SETTLED" customLabel="Disbursed" />
+                      ) : (
+                        <StatusBadge status={item.status} />
+                      )
+                    ) : isIncomingRequest ? (
+                      item.status === "PENDING" ? (
                         <div className="flex items-center gap-1.5">
                           {confirmDeclineId === item.id ? (
                             <div className="flex items-center gap-1">
@@ -886,45 +1050,47 @@ export function DashboardOverview({
                             </Button>
                           </Link>
                         </div>
+                      ) : item.status === "CANCELLED" ? (
+                        <StatusBadge status="CANCELLED" />
+                      ) : item.status === "SETTLING" ? (
+                        <StatusBadge status="SETTLING" customLabel="Payment Confirming" />
+                      ) : item.paidTxid ? (
+                        <StatusBadge status="SETTLED" customLabel="Paid" />
                       ) : (
+                        <StatusBadge status={item.status} />
+                      )
+                    ) : isReceivedTip ? (
+                      item.status === "FUNDED" ? (
                         <div className="flex items-center gap-1.5">
                           <Button
-                            onClick={() => handleCancelRequest(item.id)}
+                            onClick={() => onOpenClaim(item)}
+                            size="sm"
+                            variant="primary"
+                            className="h-7 px-3 text-[11px] font-bold shadow-subtle cursor-pointer"
+                          >
+                            Claim
+                          </Button>
+                          <StatusBadge status="READY_TO_DISBURSE" />
+                        </div>
+                      ) : item.status === "PENDING_VERIFICATION" ? (
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            onClick={() => onOpenClaim(item)}
                             size="sm"
                             variant="ghost"
-                            disabled={isActionLoadingMap[item.id]}
-                            className="h-7 px-2.5 text-[11px] font-semibold text-brown-600 hover:text-rose-700 hover:bg-rose-50 border border-butter-300"
+                            className="h-7 px-2.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200"
                           >
-                            {isActionLoadingMap[item.id] ? "Cancelling..." : "Cancel"}
+                            Retry Claim
                           </Button>
                           <StatusBadge status={item.status} />
                         </div>
-                      )
-                    ) : item.status === "FORWARD_PENDING" ? (
-                      <div className="flex items-center gap-1.5">
-                        {isPayLink ? (
-                          <Button
-                            onClick={() => handleRetryPayLinkForward(item.slug)}
-                            size="sm"
-                            variant="primary"
-                            disabled={isActionLoadingMap[item.slug]}
-                            className="h-7 px-2.5 text-[11px] font-bold shadow-subtle bg-amber-600 hover:bg-amber-700 text-white"
-                          >
-                            {isActionLoadingMap[item.slug] ? "Retrying..." : "Retry Payout"}
-                          </Button>
-                        ) : item.type === "request" && !item.isIncoming ? (
-                          <Button
-                            onClick={() => handleRetryRequestForward(item.id)}
-                            size="sm"
-                            variant="primary"
-                            disabled={isActionLoadingMap[item.id]}
-                            className="h-7 px-2.5 text-[11px] font-bold shadow-subtle bg-amber-600 hover:bg-amber-700 text-white"
-                          >
-                            {isActionLoadingMap[item.id] ? "Retrying..." : "Retry Payout"}
-                          </Button>
-                        ) : null}
+                      ) : item.status === "CLAIMED" ? (
+                        <StatusBadge status="CLAIMED" customLabel="Claimed" />
+                      ) : item.status === "FUNDING_DETECTED" ? (
+                        <StatusBadge status="FUNDING_DETECTED" customLabel="Incoming (Confirming)" />
+                      ) : (
                         <StatusBadge status={item.status} />
-                      </div>
+                      )
                     ) : (
                       <StatusBadge
                         status={item.status}
@@ -937,18 +1103,6 @@ export function DashboardOverview({
                             ? "Claim in Progress"
                             : item.type === "sent" && item.status === "FUNDING_DETECTED"
                             ? "Confirming on-chain"
-                            : item.type === "received" && item.status === "FUNDING_DETECTED"
-                            ? "Incoming (Confirming)"
-                            : item.type === "request" && item.status === "SETTLING"
-                            ? item.isIncoming
-                              ? "Payment Confirming"
-                              : "Incoming (Confirming)"
-                            : item.type === "request" && item.status === "FORWARD_PENDING"
-                            ? "Payout Pending"
-                            : item.type === "request" && item.status === "FULFILLED"
-                            ? item.isIncoming
-                              ? "Paid"
-                              : "Received"
                             : undefined
                         }
                       />

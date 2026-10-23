@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
 import { ufvkWatcher } from "@/lib/escrow/ufvk-watcher";
+import { zallet } from "@/lib/zcash";
 
 export async function GET(
   req: NextRequest,
@@ -12,12 +13,13 @@ export async function GET(
       return NextResponse.json({ error: "Tip not found" }, { status: 404 });
     }
 
-    // 1. Autonomous Mobile Detection: If tip is PENDING, check if UFVK watcher detected incoming note
-    if (tip.status === "PENDING" && tip.escrowAddress) {
+    // 1. Autonomous Mobile Detection: If tip is CREATED or PENDING, check if UFVK watcher detected incoming note
+    const activeEscrowAddress = tip.escrowAddress || tip.escrowDepositAddress;
+    if ((tip.status === "CREATED" || tip.status === "PENDING") && activeEscrowAddress) {
       try {
         const detected = ufvkWatcher.findNoteByAddressOrMemo({
           expectedAmountZec: tip.amountZec,
-          depositAddress: tip.escrowAddress,
+          depositAddress: activeEscrowAddress,
         });
         if (detected?.txid) {
           const updated = await dbService.confirmTipFunding(
@@ -44,6 +46,18 @@ export async function GET(
       }
     }
 
+    // 3. Live confirmation tracking from Zcash node (matching PayLink/Request pattern)
+    let confirmations = 0;
+    const activeTxid = tip.fundingTxid;
+    if (activeTxid) {
+      try {
+        const rawTx = await zallet.call<any>("getrawtransaction", [activeTxid, 1]);
+        confirmations = rawTx?.confirmations || 0;
+      } catch {
+        // In mempool (0-conf)
+      }
+    }
+
     return NextResponse.json({
       success: true,
       tip: {
@@ -53,6 +67,8 @@ export async function GET(
         escrowAddress: tip.escrowDepositAddress || tip.escrowAddress,
         escrowDepositAddress: tip.escrowDepositAddress,
         fundingTxid: tip.fundingTxid,
+        confirmations,
+        claimTxid: tip.claimTxid,
         createdAt: tip.createdAt,
       },
     });

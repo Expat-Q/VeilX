@@ -151,10 +151,11 @@ export function serializeV6ShieldedTransaction(params: ShieldedV6TransactionPara
   chunks.push(writeCompactSize(0));
   // 9. Sapling outputs (0)
   chunks.push(writeCompactSize(0));
-  // 10. Orchard actions (0)
+
+  // 10. Canonical Orchard actions count: 0 (No Orchard actions in NU6.3 spend)
   chunks.push(writeCompactSize(0));
 
-  // 11. Ironwood actions count
+  // 11. Canonical Ironwood actions count
   chunks.push(writeCompactSize(params.actions.length));
   for (const act of params.actions) {
     chunks.push(Buffer.from(act.cv_net_hex, "hex"));
@@ -166,28 +167,28 @@ export function serializeV6ShieldedTransaction(params: ShieldedV6TransactionPara
     chunks.push(Buffer.from(act.out_ciphertext_hex, "hex"));
   }
 
-  // 12. Flags: 1 byte
+  // 12. Ironwood Flags: 1 byte
   chunks.push(Buffer.from([params.flags]));
 
-  // 13. ValueBalance: 8 bytes i64 LE
+  // 13. Ironwood ValueBalance: 8 bytes i64 LE
   const valBuf = Buffer.alloc(8);
   valBuf.writeBigInt64LE(BigInt(params.valueBalanceZat), 0);
   chunks.push(valBuf);
 
-  // 14. Anchor: 32 bytes (wire bytes)
+  // 14. Ironwood Anchor: 32 bytes (wire bytes)
   chunks.push(Buffer.from(params.anchorHex, "hex"));
 
-  // 15. Proof: compactSize length + proof bytes
+  // 15. Ironwood Proof: compactSize length + proof bytes
   const proofBuf = Buffer.from(params.proofHex, "hex");
   chunks.push(writeCompactSize(proofBuf.length));
   chunks.push(proofBuf);
 
-  // 16. SpendAuthSigs: 64 bytes per action
+  // 16. Ironwood SpendAuthSigs: 64 bytes per action
   for (const sig of params.spendAuthSigsHex) {
     chunks.push(Buffer.from(sig, "hex"));
   }
 
-  // 17. BindingSig: 64 bytes
+  // 17. Ironwood BindingSig: 64 bytes
   chunks.push(Buffer.from(params.bindingSigHex, "hex"));
 
   return Buffer.concat(chunks).toString("hex");
@@ -949,10 +950,22 @@ export class ZalletClient {
           (rawTx.hex && rawTx.hex.length > 1000)
         );
 
-        const hasNoConflictingTransparentOuts =
-          !Array.isArray(rawTx.vout) || rawTx.vout.length === 0 || totalPaidToTarget > 0;
+        // A shielded tx may have transparent change outputs (vout) that don't go to the escrow address.
+        // This is not "conflicting" — it just means the shielded portion holds the actual payment.
+        // Only block if transparent outputs went to a completely different non-escrow destination with value.
+        const hasConflictingTransparentOuts =
+          Array.isArray(rawTx.vout) &&
+          rawTx.vout.length > 0 &&
+          totalPaidToTarget === 0 &&
+          rawTx.vout.some((out: any) => {
+            const outAddrs: string[] = [];
+            if (Array.isArray(out.scriptPubKey?.addresses)) outAddrs.push(...out.scriptPubKey.addresses);
+            if (typeof out.scriptPubKey?.address === "string") outAddrs.push(out.scriptPubKey.address);
+            // Transparent outputs with no recognizable address (e.g. OP_RETURN, change) are not conflicting
+            return outAddrs.length > 0 && (out.value || 0) >= expectedAmountZec * 0.999;
+          });
 
-        if (isShieldedTx && hasNoConflictingTransparentOuts) {
+        if (isShieldedTx && !hasConflictingTransparentOuts) {
           if (confirmations < minConfirmations) {
             return {
               verified: false,

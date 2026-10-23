@@ -180,7 +180,7 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-brown-900">
-                Your Settlement Address (t1...)
+                Your Payout Address (u1...)
               </label>
               <button
                 type="button"
@@ -207,7 +207,7 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
                 setShieldedUa(e.target.value);
                 setErrorNotice(null);
               }}
-              placeholder="t1... (Your wallet&apos;s transparent address for auto-forwarding)"
+              placeholder="u1... (Your personal shielded Orchard address from Zashi or YWallet)"
               className={`font-mono text-xs ${
                 addressValidation
                   ? addressValidation.isValid
@@ -220,18 +220,33 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
               <NetworkMismatchAlert isNetworkMismatch={true} />
             ) : addressValidation?.isValid ? (
               <div className="space-y-1.5">
-                {(addressValidation.type === "p2pkh" || addressValidation.type === "p2sh") ? (
-                  <p className="text-[11px] text-emerald-700 flex items-center gap-1 font-medium">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Valid Mainnet Transparent address (⚡ Instant Auto-Forwarding)</span>
-                  </p>
+                {addressValidation.type === "unified" ? (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2 text-xs text-emerald-950 animate-in fade-in">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold">🛡️ Shielded Merchant Settlement</span>
+                      <p className="text-[11px] text-emerald-800 leading-snug">
+                        All payments will be delivered with complete privacy directly to your Orchard address.
+                      </p>
+                    </div>
+                  </div>
+                ) : (addressValidation.type === "p2pkh" || addressValidation.type === "p2sh") ? (
+                  <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2 text-xs text-amber-950 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold">⚠️ Public Ledger Notice</span>
+                      <p className="text-[11px] text-amber-900 leading-snug">
+                        You entered a transparent address (<code className="font-mono font-bold text-amber-950">t1...</code>). All payments forwarded to this address will be publicly visible to anyone inspecting the Zcash blockchain. Use your shielded address (<code className="font-mono font-bold text-amber-950">u1...</code>) to keep your revenue confidential.
+                      </p>
+                    </div>
+                  </div>
                 ) : (
                   <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2 text-xs text-amber-950 animate-in fade-in">
                     <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <div className="space-y-0.5">
-                      <span className="font-bold">Shielded Address Detected</span>
+                      <span className="font-bold">Sapling Address Detected</span>
                       <p className="text-[11px] text-amber-800 leading-snug">
-                        Merchant auto-forwarding requires a transparent address (<code className="font-mono font-bold text-amber-950">t1...</code>) for instant settlement without cloud proving delays. You can easily re-shield in your wallet anytime.
+                        Please provide an Orchard Unified address (<code className="font-mono font-bold text-amber-950">u1...</code>) from Zashi or YWallet for maximum privacy.
                       </p>
                     </div>
                   </div>
@@ -244,7 +259,7 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
               </p>
             ) : (
               <p className="text-[11px] text-brown-500">
-                When paid by client, funds are auto-forwarded directly to this transparent address in ~2 seconds.
+                When paid by client, funds are settled directly into your wallet with complete privacy.
               </p>
             )}
           </div>
@@ -259,7 +274,13 @@ export function PayLinkModal({ isOpen, onClose }: PayLinkModalProps) {
                 !shieldedUa.trim() ||
                 isLoading ||
                 Boolean(addressValidation && !addressValidation.isValid) ||
-                Boolean(addressValidation?.isNetworkMismatch) || Boolean(addressValidation && addressValidation.type !== "p2pkh" && addressValidation.type !== "p2sh")
+                Boolean(addressValidation?.isNetworkMismatch) ||
+                Boolean(
+                  addressValidation &&
+                  addressValidation.type !== "unified" &&
+                  addressValidation.type !== "p2pkh" &&
+                  addressValidation.type !== "p2sh"
+                )
               }
               isLoading={isLoading}
               variant="primary"

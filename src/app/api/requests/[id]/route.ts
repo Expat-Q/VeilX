@@ -18,12 +18,13 @@ export async function GET(
     }
 
     // 1. Autonomous Mobile Detection: If request is PENDING, check if UFVK watcher detected incoming note
-    if (request.status === "PENDING" && request.escrowDepositAddress) {
+    const activeShieldedDeposit = request.shieldedEscrowAddress || request.escrowDepositAddress;
+    if (request.status === "PENDING" && activeShieldedDeposit) {
       try {
         const detected = ufvkWatcher.findNoteByAddressOrMemo({
           expectedAmountZec: request.amountZec,
           expectedMemo: request.memo,
-          depositAddress: request.escrowDepositAddress,
+          depositAddress: activeShieldedDeposit,
         });
         if (detected?.txid) {
           const settled = await dbService.settleRequest({
@@ -63,11 +64,19 @@ export async function GET(
 
     const activeTransparentVault = zallet.getEscrowTransparentAddress();
     const activeEscrowDeposit =
-      !request.escrowDepositAddress ||
-      request.escrowDepositAddress.startsWith("u1") ||
-      request.escrowDepositAddress.startsWith("utest1")
-        ? activeTransparentVault
-        : request.escrowDepositAddress;
+      request.escrowDepositAddress ||
+      request.shieldedEscrowAddress ||
+      activeTransparentVault;
+
+    let confirmations = 0;
+    if (request.paidTxid) {
+      try {
+        const rawTx = await zallet.call<any>("getrawtransaction", [request.paidTxid, 1]);
+        confirmations = rawTx?.confirmations || 0;
+      } catch {
+        // In mempool (0-conf)
+      }
+    }
 
     // Redact private shielded UA for non-owners to prevent PII/financial tracking
     const safeRequest: any = {
@@ -80,6 +89,7 @@ export async function GET(
       escrowDepositAddress: activeEscrowDeposit,
       status: request.status,
       paidTxid: request.paidTxid,
+      confirmations,
       forwardTxid: request.forwardTxid,
       paidAt: request.paidAt,
       createdAt: request.createdAt,

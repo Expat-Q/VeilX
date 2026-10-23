@@ -35,7 +35,6 @@ export default function Home() {
   const [isRequestOpen, setIsRequestOpen] = useState(false);
   const [isPayLinkOpen, setIsPayLinkOpen] = useState(false);
   const [selectedClaimTip, setSelectedClaimTip] = useState<any | null>(null);
-  const [batchClaimTips, setBatchClaimTips] = useState<any[] | null>(null);
   const [isConnectedSuccessOpen, setIsConnectedSuccessOpen] = useState(false);
 
   // Mobile active tab state
@@ -130,7 +129,6 @@ export default function Home() {
                 onOpenRequest={() => setIsRequestOpen(true)}
                 onOpenPayLink={() => setIsPayLinkOpen(true)}
                 onOpenClaim={(tip) => setSelectedClaimTip(tip)}
-                onOpenBatchClaim={(tips) => setBatchClaimTips(tips)}
                 onLogout={handleLogout}
               />
             </ErrorBoundary>
@@ -190,12 +188,10 @@ export default function Home() {
       />
 
       <ClaimModal
-        isOpen={!!selectedClaimTip || !!batchClaimTips}
+        isOpen={!!selectedClaimTip}
         tip={selectedClaimTip}
-        tipsToBatchClaim={batchClaimTips}
         onClose={() => {
           setSelectedClaimTip(null);
-          setBatchClaimTips(null);
           setMobileTab("home");
           setRefreshKey((k) => k + 1);
         }}

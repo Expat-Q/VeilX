@@ -10,6 +10,9 @@ pub mod tree_manager;
 pub mod unified_address;
 pub mod pczt_escrow;
 
+// Export init_thread_pool from wasm_bindgen_rayon for browser multithreading
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -213,6 +216,46 @@ pub fn tree_track_note(cm_hex: &str) -> Result<(), JsValue> {
     let mut tree_guard = tree_manager::GLOBAL_ORCHARD_TREE.lock()
         .map_err(|_| JsValue::from_str("Failed to lock global Orchard tree"))?;
     tree_guard.track_note(&cm).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen]
+pub fn tree_get_witness_for_note(cm_hex: &str) -> Result<JsValue, JsValue> {
+    #[derive(Serialize)]
+    struct MerklePathOutput {
+        position: u32,
+        auth_path_hashes_hex: Vec<String>,
+        root_hex: String,
+    }
+
+    let b = hex::decode(cm_hex).map_err(|e| JsValue::from_str(&format!("Invalid cmx hex: {}", e)))?;
+    if b.len() != 32 {
+        return Err(JsValue::from_str("Commitment must be 32 bytes"));
+    }
+    let mut cm = [0u8; 32];
+    cm.copy_from_slice(&b);
+
+    let tree_guard = tree_manager::GLOBAL_ORCHARD_TREE.lock()
+        .map_err(|_| JsValue::from_str("Failed to lock global Orchard tree"))?;
+
+    let merkle_path = tree_guard.get_witness_for_note(&cm).map_err(|e| JsValue::from_str(&e))?;
+    let position = merkle_path.position();
+    let auth_path_hashes_hex: Vec<String> = merkle_path.auth_path()
+        .iter()
+        .map(|h| hex::encode(h.to_bytes()))
+        .collect();
+
+    let opt_cmx: Option<orchard::note::ExtractedNoteCommitment> = orchard::note::ExtractedNoteCommitment::from_bytes(&cm).into();
+    let cmx = opt_cmx.ok_or_else(|| JsValue::from_str("Failed to parse extracted commitment"))?;
+    let root = merkle_path.root(cmx);
+    let root_hex = hex::encode(root.to_bytes());
+
+    let out = MerklePathOutput {
+        position,
+        auth_path_hashes_hex,
+        root_hex,
+    };
+
+    serde_wasm_bindgen::to_value(&out).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[wasm_bindgen]

@@ -18,12 +18,13 @@ export async function GET(
     }
 
     // 1. Autonomous Mobile Detection: If paylink is UNPAID, check if UFVK watcher detected incoming note
-    if (paylink.status === "UNPAID" && paylink.escrowDepositAddress) {
+    const activeShieldedDeposit = paylink.shieldedEscrowAddress || paylink.escrowDepositAddress;
+    if (paylink.status === "UNPAID" && activeShieldedDeposit) {
       try {
         const detected = ufvkWatcher.findNoteByAddressOrMemo({
           expectedAmountZec: paylink.amountZec,
           expectedMemo: paylink.title,
-          depositAddress: paylink.escrowDepositAddress,
+          depositAddress: activeShieldedDeposit,
         });
         if (detected?.txid) {
           const settled = await dbService.settlePayLink({
@@ -63,11 +64,19 @@ export async function GET(
 
     const activeTransparentVault = zallet.getEscrowTransparentAddress();
     const activeEscrowDeposit =
-      !paylink.escrowDepositAddress ||
-      paylink.escrowDepositAddress.startsWith("u1") ||
-      paylink.escrowDepositAddress.startsWith("utest1")
-        ? activeTransparentVault
-        : paylink.escrowDepositAddress;
+      paylink.escrowDepositAddress ||
+      paylink.shieldedEscrowAddress ||
+      activeTransparentVault;
+
+    let confirmations = 0;
+    if (paylink.paidTxid) {
+      try {
+        const rawTx = await zallet.call<any>("getrawtransaction", [paylink.paidTxid, 1]);
+        confirmations = rawTx?.confirmations || 0;
+      } catch {
+        // In mempool (0-conf)
+      }
+    }
 
     const safePaylink: any = {
       _id: paylink._id,
@@ -80,6 +89,7 @@ export async function GET(
       escrowDepositAddress: activeEscrowDeposit,
       status: paylink.status,
       paidTxid: paylink.paidTxid,
+      confirmations,
       forwardTxid: paylink.forwardTxid,
       paidAt: paylink.paidAt,
       createdAt: paylink.createdAt,

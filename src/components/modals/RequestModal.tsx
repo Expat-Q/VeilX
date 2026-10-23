@@ -15,6 +15,7 @@ import {
   AlertCircle,
   X,
   CheckCircle2,
+  ShieldCheck,
   Clock,
   Clipboard,
 } from "lucide-react";
@@ -322,7 +323,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
         step === 1
           ? "Search by 𝕏 handle to specify who should settle this request"
           : step === 2
-          ? "Set amount, note, and your transparent settlement address (t1...)"
+          ? "Set amount, note, and your payout address (u1...)"
           : "Share this link with them to settle non-custodially"
       }
     >
@@ -516,7 +517,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
         </div>
       )}
 
-      {/* STEP 2: Amount, Note & Transparent Settlement Address */}
+      {/* STEP 2: Amount, Note & Payout Address */}
       {step === 2 && selectedUser && (
         <div className="space-y-4 text-left">
           {errorNotice && (
@@ -586,7 +587,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-brown-900">
-                Your Transparent Settlement Address (t1...)
+                Your Payout Address (u1...)
               </label>
               <button
                 type="button"
@@ -614,7 +615,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
             </div>
 
             <Input
-              placeholder="t1... (Your wallet&apos;s transparent address for auto-forwarding)"
+              placeholder="u1... (Your personal shielded Orchard address from Zashi or YWallet)"
               value={shieldedUa}
               onChange={(e) => {
                 setShieldedUa(e.target.value);
@@ -632,18 +633,33 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
               <NetworkMismatchAlert isNetworkMismatch={true} />
             ) : addressValidation?.isValid ? (
               <div className="space-y-1.5">
-                {(addressValidation.type === "p2pkh" || addressValidation.type === "p2sh") ? (
-                  <p className="text-[11px] text-emerald-700 flex items-center gap-1 font-medium">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Valid Mainnet Transparent address (⚡ Instant Auto-Forwarding)</span>
-                  </p>
+                {addressValidation.type === "unified" ? (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2 text-xs text-emerald-950 animate-in fade-in">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold">🛡️ Shielded Request Settlement</span>
+                      <p className="text-[11px] text-emerald-800 leading-snug">
+                        Incoming payment will be delivered straight into your private shielded balance.
+                      </p>
+                    </div>
+                  </div>
+                ) : (addressValidation.type === "p2pkh" || addressValidation.type === "p2sh") ? (
+                  <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2 text-xs text-amber-950 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold">⚠️ Public Transparency Warning</span>
+                      <p className="text-[11px] text-amber-900 leading-snug">
+                        Anyone inspecting the public blockchain will see this payment sent to your address. Use your shielded address (<code className="font-mono font-bold text-amber-950">u1...</code>) to keep your balance confidential.
+                      </p>
+                    </div>
+                  </div>
                 ) : (
                   <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2 text-xs text-amber-950 animate-in fade-in">
                     <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <div className="space-y-0.5">
-                      <span className="font-bold">Shielded Address Detected</span>
+                      <span className="font-bold">Sapling Address Detected</span>
                       <p className="text-[11px] text-amber-800 leading-snug">
-                        Auto-forwarding requires a transparent address (<code className="font-mono font-bold text-amber-950">t1...</code>) for instant settlement without cloud proving delays. You can easily re-shield in your wallet anytime.
+                        Please provide an Orchard Unified address (<code className="font-mono font-bold text-amber-950">u1...</code>) from Zashi or YWallet for maximum privacy.
                       </p>
                     </div>
                   </div>
@@ -656,7 +672,7 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
               </p>
             ) : (
               <p className="text-[11px] text-brown-500">
-                Paste your wallet&apos;s transparent address (starts with t1...) for instant auto-forwarding.
+                Paste your wallet&apos;s shielded address (starts with u1...) for complete privacy.
               </p>
             )}
           </div>
@@ -676,7 +692,12 @@ export function RequestModal({ isOpen, onClose, initialUser }: RequestModalProps
                 isLoading ||
                 Boolean(addressValidation && !addressValidation.isValid) ||
                 Boolean(addressValidation?.isNetworkMismatch) ||
-                Boolean(addressValidation && addressValidation.type !== "p2pkh" && addressValidation.type !== "p2sh")
+                Boolean(
+                  addressValidation &&
+                  addressValidation.type !== "unified" &&
+                  addressValidation.type !== "p2pkh" &&
+                  addressValidation.type !== "p2sh"
+                )
               }
               isLoading={isLoading}
             >

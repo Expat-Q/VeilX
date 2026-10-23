@@ -6,7 +6,7 @@ use pasta_curves::group::{Group, GroupEncoding};
 use lazy_static::lazy_static;
 use orchard::{
     builder::{Builder, BundleType},
-    bundle::{Authorized, BatchValidator, Bundle, BundleVersion, Flags, TxVersion},
+    bundle::{Authorized, BatchValidator, Bundle, BundleVersion, TxVersion},
     circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
     keys::{
         FullViewingKey, OutgoingViewingKey,
@@ -259,7 +259,7 @@ pub fn build_and_prove_orchard_bundle(
     };
 
     let bundle_version = BundleVersion::ironwood_v3();
-    let flags = Flags::ENABLED;
+    let flags = bundle_version.default_flags();
 
     let mut builder = Builder::new(BundleType::DEFAULT, bundle_version, flags, anchor)
         .map_err(|e| format!("Orchard Builder init error: {:?}", e))?;
@@ -326,7 +326,7 @@ pub fn build_and_prove_orchard_spend(
     };
 
     let bundle_version = BundleVersion::ironwood_v3();
-    let flags = Flags::ENABLED;
+    let flags = bundle_version.default_flags();
 
     let mut builder = Builder::new(BundleType::DEFAULT, bundle_version, flags, anchor)
         .map_err(|e| format!("Orchard Builder init error: {:?}", e))?;

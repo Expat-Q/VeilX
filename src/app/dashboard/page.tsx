@@ -20,6 +20,8 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<{
+    id?: string;
+    userId?: string;
     name: string;
     username: string;
     profileImageUrl?: string;
@@ -36,7 +38,6 @@ export default function DashboardPage() {
   const [isRequestOpen, setIsRequestOpen] = useState(false);
   const [isPayLinkOpen, setIsPayLinkOpen] = useState(false);
   const [selectedClaimTip, setSelectedClaimTip] = useState<any | null>(null);
-  const [batchClaimTips, setBatchClaimTips] = useState<any[] | null>(null);
   const [isConnectedSuccessOpen, setIsConnectedSuccessOpen] = useState(false);
 
   // Mobile navigation tab
@@ -64,6 +65,8 @@ export default function DashboardPage() {
           const safeName = raw.xDisplayName || raw.name || raw.xUsername || raw.username || "Creator";
           const safeUsername = raw.xUsername || raw.username || "creator";
           setUser({
+            id: raw.userId || raw.id,
+            userId: raw.userId || raw.id,
             name: safeName,
             username: safeUsername,
             profileImageUrl: raw.profileImageUrl,
@@ -168,7 +171,6 @@ export default function DashboardPage() {
             onOpenRequest={() => setIsRequestOpen(true)}
             onOpenPayLink={() => setIsPayLinkOpen(true)}
             onOpenClaim={(tip) => setSelectedClaimTip(tip)}
-            onOpenBatchClaim={(tips) => setBatchClaimTips(tips)}
             onLogout={handleLogout}
           />
         </ErrorBoundary>
@@ -194,12 +196,10 @@ export default function DashboardPage() {
       <PayLinkModal isOpen={isPayLinkOpen} onClose={() => setIsPayLinkOpen(false)} />
 
       <ClaimModal
-        isOpen={!!selectedClaimTip || !!batchClaimTips}
+        isOpen={!!selectedClaimTip}
         tip={selectedClaimTip}
-        tipsToBatchClaim={batchClaimTips}
         onClose={() => {
           setSelectedClaimTip(null);
-          setBatchClaimTips(null);
           setRefreshKey((k) => k + 1);
         }}
         onClaimSuccess={() => {

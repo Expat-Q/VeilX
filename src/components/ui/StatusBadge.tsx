@@ -73,6 +73,21 @@ export function StatusBadge({ status, className, customLabel }: StatusBadgeProps
       styles: "bg-gold-50 text-gold-900 border-gold-200/80 animate-pulse",
       dot: "bg-gold-500",
     },
+    READY_TO_DISBURSE: {
+      label: "Ready to Disburse",
+      styles: "bg-amber-50 text-amber-900 border-amber-300",
+      dot: "bg-amber-500",
+    },
+    DISBURSED: {
+      label: "Disbursed",
+      styles: "bg-emerald-50 text-emerald-900 border-emerald-200/80",
+      dot: "bg-emerald-500",
+    },
+    SETTLED: {
+      label: "Settled",
+      styles: "bg-emerald-50 text-emerald-900 border-emerald-200/80",
+      dot: "bg-emerald-500",
+    },
   };
 
   const current = config[normalized] || {
