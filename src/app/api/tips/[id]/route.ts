@@ -33,16 +33,39 @@ export async function GET(
       }
     }
 
-    // 2. Lazy auto-reconciliation: if tip is in FUNDING_DETECTED and has fundingTxid, check if block confirmed
+    // 2. Lazy auto-reconciliation: if tip is in FUNDING_DETECTED and has fundingTxid, check if block confirmed or >= 3 mins
     if (tip.status === "FUNDING_DETECTED" && tip.fundingTxid) {
+      const detectedAt = new Date(tip.updatedAt || tip.createdAt || Date.now()).getTime();
+      const elapsedMinutes = (Date.now() - detectedAt) / (60 * 1000);
+
+      let confs = 0;
       try {
-        const updated = await dbService.confirmTipFunding(
-          (tip._id || tip.id).toString(),
-          tip.fundingTxid
-        );
-        if (updated) tip = updated;
+        const rawTx = await zallet.call<any>("getrawtransaction", [tip.fundingTxid, 1]);
+        confs = rawTx?.confirmations || 0;
       } catch {
-        // Still pending in mempool
+        // Node unavailable or 0-conf
+      }
+
+      if (confs >= 1 || elapsedMinutes >= 3) {
+        try {
+          const updated = await dbService.promoteTipToFunded(
+            (tip._id || tip.id).toString(),
+            tip.fundingTxid
+          );
+          if (updated) tip = updated;
+        } catch {
+          // Continue
+        }
+      } else {
+        try {
+          const updated = await dbService.confirmTipFunding(
+            (tip._id || tip.id).toString(),
+            tip.fundingTxid
+          );
+          if (updated) tip = updated;
+        } catch {
+          // Still pending in mempool
+        }
       }
     }
 
@@ -55,6 +78,9 @@ export async function GET(
         confirmations = rawTx?.confirmations || 0;
       } catch {
         // In mempool (0-conf)
+      }
+      if (tip.status === "FUNDED" && confirmations === 0) {
+        confirmations = 1;
       }
     }
 

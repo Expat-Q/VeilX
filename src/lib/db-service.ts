@@ -101,6 +101,29 @@ export const dbService = {
         ];
       }
       const tips = await Tip.find(filter).sort({ createdAt: -1 }).limit(50).lean();
+      if (tips && tips.length > 0) {
+        const now = Date.now();
+        for (let i = 0; i < tips.length; i++) {
+          const t = tips[i];
+          if (t.status === "FUNDING_DETECTED") {
+            const detectedAt = new Date(t.updatedAt || t.createdAt || now).getTime();
+            const elapsedMinutes = (now - detectedAt) / (60 * 1000);
+            let hasConfirmed = elapsedMinutes >= 3;
+            if (!hasConfirmed && t.fundingTxid) {
+              try {
+                const rawTx = await zallet.call<any>("getrawtransaction", [t.fundingTxid, 1]);
+                if (rawTx?.confirmations && rawTx.confirmations >= 1) {
+                  hasConfirmed = true;
+                }
+              } catch {}
+            }
+            if (hasConfirmed) {
+              await Tip.findByIdAndUpdate(t._id, { $set: { status: "FUNDED", updatedAt: new Date() } }).catch(() => {});
+              t.status = "FUNDED";
+            }
+          }
+        }
+      }
       return tips || [];
     } catch (e) {
       if (IS_PRODUCTION) {
@@ -114,15 +137,27 @@ export const dbService = {
 
     // In-memory development fallback (only reached if MongoDB is unreachable)
     const validStatuses = new Set(["FUNDING_DETECTED", "FUNDED", "CLAIMING", "CLAIMED", "PENDING_VERIFICATION"]);
-    if (username) {
-      const clean = username.replace("@", "").trim().toLowerCase();
-      return memoryStore.tips.filter(
-        (t) =>
-          (includeUnfunded || validStatuses.has(t.status)) &&
-          (t.recipientUsernameSnapshot?.toLowerCase() === clean || t.senderUsernameSnapshot?.toLowerCase() === clean)
-      );
+    const list = username
+      ? memoryStore.tips.filter(
+          (t) =>
+            (includeUnfunded || validStatuses.has(t.status)) &&
+            (t.recipientUsernameSnapshot?.toLowerCase() === username.replace("@", "").trim().toLowerCase() ||
+             t.senderUsernameSnapshot?.toLowerCase() === username.replace("@", "").trim().toLowerCase())
+        )
+      : (includeUnfunded ? memoryStore.tips : memoryStore.tips.filter((t) => validStatuses.has(t.status)));
+
+    const now = Date.now();
+    for (const t of list) {
+      if (t.status === "FUNDING_DETECTED") {
+        const detectedAt = new Date(t.updatedAt || t.createdAt || now).getTime();
+        const elapsedMinutes = (now - detectedAt) / (60 * 1000);
+        if (elapsedMinutes >= 3) {
+          t.status = "FUNDED";
+          t.updatedAt = new Date();
+        }
+      }
     }
-    return includeUnfunded ? memoryStore.tips : memoryStore.tips.filter((t) => validStatuses.has(t.status));
+    return list;
   },
 
   async confirmTipFunding(tipId: string, fundingTxid: string, blockHeight?: number) {
@@ -163,7 +198,10 @@ export const dbService = {
     }
 
     const isMempool = verification.confirmations === 0 || verification.detectedInMempool === true;
-    const targetStatus = isMempool ? "FUNDING_DETECTED" : "FUNDED";
+    const detectedAt = new Date(tip.updatedAt || tip.createdAt || Date.now()).getTime();
+    const elapsedMinutes = (Date.now() - detectedAt) / (60 * 1000);
+    const hasElapsedGracePeriod = elapsedMinutes >= 3;
+    const targetStatus = (isMempool && !hasElapsedGracePeriod) ? "FUNDING_DETECTED" : "FUNDED";
 
     const finalizedAmountZec = (verification.actualAmountZec && verification.actualAmountZec > 0)
       ? Math.min(tip.amountZec, verification.actualAmountZec)
@@ -214,6 +252,35 @@ export const dbService = {
     }
 
     throw new Error("TIP_NOT_FOUND: Could not locate tip record to confirm funding.");
+  },
+
+
+  async promoteTipToFunded(tipId: string, fundingTxid?: string) {
+    try {
+      await connectToDatabase();
+      const updateData: any = { status: "FUNDED", updatedAt: new Date() };
+      if (fundingTxid) updateData.fundingTxid = fundingTxid.trim().toLowerCase();
+      const updated = await Tip.findByIdAndUpdate(
+        tipId,
+        { $set: updateData },
+        { new: true }
+      ).lean();
+      if (updated) {
+        if (fundingTxid) memoryStore.usedTxids.add(fundingTxid.trim().toLowerCase());
+        return updated;
+      }
+    } catch (e) {
+      if (IS_PRODUCTION) console.warn("[dbService] promoteTipToFunded warning:", e);
+    }
+
+    const inMem = memoryStore.tips.find((t) => t._id === tipId || t.id === tipId);
+    if (inMem) {
+      inMem.status = "FUNDED";
+      inMem.updatedAt = new Date();
+      if (fundingTxid) inMem.fundingTxid = fundingTxid.trim().toLowerCase();
+      return inMem;
+    }
+    return null;
   },
 
   async getTipById(tipId: string) {
@@ -868,14 +935,38 @@ export const dbService = {
 
     if (!isMongo) {
       pendingTips = memoryStore.tips.filter(
-        (t) => t.status === "CLAIMING" || t.status === "PENDING_VERIFICATION"
+        (t) => t.status === "CLAIMING" || t.status === "PENDING_VERIFICATION" || t.status === "FUNDING_DETECTED"
       );
     }
 
     const results = [];
+    const now = Date.now();
     for (const tip of pendingTips) {
       const id = (tip._id || tip.id).toString();
       try {
+        if (tip.status === "FUNDING_DETECTED") {
+          const detectedAt = new Date(tip.updatedAt || tip.createdAt || now).getTime();
+          const elapsedMinutes = (now - detectedAt) / (60 * 1000);
+          let hasMinedBlock = false;
+          if (tip.fundingTxid) {
+            try {
+              const rawTx = await zallet.call<any>("getrawtransaction", [tip.fundingTxid, 1]);
+              if (rawTx?.confirmations && rawTx.confirmations >= 1) {
+                hasMinedBlock = true;
+              }
+            } catch {
+              // Node unavailable or 0-conf
+            }
+          }
+          if (hasMinedBlock || elapsedMinutes >= 3) {
+            await this.promoteTipToFunded(id, tip.fundingTxid);
+            results.push({ tipId: id, status: "FUNDED", reason: hasMinedBlock ? "block_confirmed" : "elapsed_3min_grace" });
+          } else {
+            results.push({ tipId: id, status: "FUNDING_DETECTED", message: `Awaiting confirmations (${elapsedMinutes.toFixed(1)}m elapsed)` });
+          }
+          continue;
+        }
+
         const res = await this.reconcileTipClaim(id);
         results.push({ tipId: id, ...res });
       } catch (err: any) {

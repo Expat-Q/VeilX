@@ -83,8 +83,16 @@ const nextConfig = {
         destination: `${backendUrl}/api/tips/:id/claim`,
       },
       {
+        source: '/api/tips/:id/fund',
+        destination: `${backendUrl}/api/tips/:id/fund`,
+      },
+      {
         source: '/api/tips/claim-all',
         destination: `${backendUrl}/api/tips/claim-all`,
+      },
+      {
+        source: '/api/tips/:id',
+        destination: `${backendUrl}/api/tips/:id`,
       },
     ];
   },
