@@ -219,7 +219,7 @@ export class ZalletClient {
   }
 
   async call<T = any>(method: string, params: any[] = [], customTimeoutMs?: number): Promise<T> {
-    const defaultTimeout = method === "z_sendmany" || method === "z_shieldcoinbase" ? 90000 : 15000;
+    const defaultTimeout = method === "z_sendmany" || method === "z_shieldcoinbase" ? 8000 : 8000;
     const timeoutMs = customTimeoutMs || defaultTimeout;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);

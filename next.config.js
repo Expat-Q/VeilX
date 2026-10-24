@@ -57,7 +57,8 @@ const nextConfig = {
     // 2. Strip trailing slashes to prevent double slash (//api) 308 redirect loops
     const backendUrl = rawBackendUrl.trim().replace(/\/+$/, "");
 
-    return [
+    return {
+      beforeFiles: [
       {
         source: '/api/health',
         destination: `${backendUrl}/api/health`,
@@ -98,7 +99,8 @@ const nextConfig = {
         source: '/api/tips/:id',
         destination: `${backendUrl}/api/tips/:id`,
       },
-    ];
+      ],
+    };
   },
 };
 
