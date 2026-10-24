@@ -13,23 +13,41 @@ export async function GET(
       return NextResponse.json({ error: "Tip not found" }, { status: 404 });
     }
 
-    // 1. Autonomous Mobile Detection: If tip is CREATED or PENDING, check if UFVK watcher detected incoming note
-    const activeEscrowAddress = tip.escrowAddress || tip.escrowDepositAddress;
+    // 1. Autonomous Inflow Detection: Check per-tip unique transparent escrow UTXOs and UFVK watcher
+    const activeEscrowAddress = tip.transparentDepositAddress || tip.escrowDepositAddress || tip.escrowAddress;
     if ((tip.status === "CREATED" || tip.status === "PENDING") && activeEscrowAddress) {
       try {
-        const detected = ufvkWatcher.findNoteByAddressOrMemo({
-          expectedAmountZec: tip.amountZec,
-          depositAddress: activeEscrowAddress,
-        });
-        if (detected?.txid) {
+        const utxos = await zallet.getEscrowUtxos(activeEscrowAddress);
+        const targetZats = tip.amountZats || Math.round(tip.amountZec * 1e8);
+        const totalZats = utxos.reduce((acc: bigint, u: any) => acc + BigInt(u.satoshis), 0n);
+
+        if (utxos.length > 0 && totalZats >= BigInt(targetZats)) {
+          const matchingTxid = utxos[0].txid;
           const updated = await dbService.confirmTipFunding(
             (tip._id || tip.id).toString(),
-            detected.txid
+            matchingTxid
           );
-          if (updated) tip = updated;
+          if (updated) {
+            tip = updated;
+            const funded = await dbService.promoteTipToFunded((tip._id || tip.id).toString(), matchingTxid);
+            if (funded) tip = funded;
+          }
+        } else {
+          // Fallback to UFVK trial decryption
+          const detected = ufvkWatcher.findNoteByAddressOrMemo({
+            expectedAmountZec: tip.amountZec,
+            depositAddress: activeEscrowAddress,
+          });
+          if (detected?.txid) {
+            const updated = await dbService.confirmTipFunding(
+              (tip._id || tip.id).toString(),
+              detected.txid
+            );
+            if (updated) tip = updated;
+          }
         }
-      } catch {
-        // Continue to regular flow
+      } catch (err) {
+        console.warn("[Tip Polling] Inflow check error:", err);
       }
     }
 
@@ -90,8 +108,9 @@ export async function GET(
         id: tip._id || tip.id,
         status: tip.status,
         amountZec: tip.amountZec,
-        escrowAddress: tip.escrowDepositAddress || tip.escrowAddress,
-        escrowDepositAddress: tip.escrowDepositAddress,
+        escrowAddress: tip.transparentDepositAddress || tip.escrowDepositAddress || tip.escrowAddress,
+        escrowDepositAddress: tip.transparentDepositAddress || tip.escrowDepositAddress,
+        transparentDepositAddress: tip.transparentDepositAddress || tip.escrowDepositAddress,
         fundingTxid: tip.fundingTxid,
         confirmations,
         claimTxid: tip.claimTxid,

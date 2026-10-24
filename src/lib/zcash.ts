@@ -464,6 +464,29 @@ export class ZalletClient {
   }
 
   /**
+   * Broadcasts a payout directly from a Tip's unique deterministic transparent escrow address.
+   * Completely self-funded with zero reliance on any shared platform vault.
+   */
+  async sendTipEscrowPayout(params: {
+    tipId: string;
+    recipientAddress: string;
+    amountZec: number;
+    memo?: string;
+  }): Promise<{ opid?: string; txid?: string; isAsync: boolean }> {
+    const { deriveTipEscrowKeypair } = await import("./escrow/tip-escrow-keys");
+    const escrowKey = deriveTipEscrowKeypair(params.tipId);
+    return this.sendShieldedPayout(
+      params.recipientAddress,
+      params.amountZec,
+      params.memo,
+      undefined,
+      undefined,
+      escrowKey.address,
+      escrowKey.privateKeyHex
+    );
+  }
+
+  /**
    * Broadcasts a subsidized payout from the platform Escrow Vault to recipient address.
    * If the connected node supports z_sendmany, it dispatches via wallet RPC.
    * Otherwise, it constructs, signs, and proves the transaction locally via Wasm and
@@ -482,7 +505,9 @@ export class ZalletClient {
       recipientRawAddress: string;
       blockHeight?: number;
     },
-    fundingTxid?: string
+    fundingTxid?: string,
+    customEscrowAddress?: string,
+    customEscrowKey?: string
   ): Promise<{ opid?: string; txid?: string; isAsync: boolean }> {
     checkPayoutCircuitBreaker();
 
@@ -513,7 +538,7 @@ export class ZalletClient {
         },
       ];
 
-      const fromAddr = process.env.ESCROW_PLATFORM_TRANSPARENT_ADDRESS || "ANY_TADDR";
+      const fromAddr = customEscrowAddress || process.env.ESCROW_PLATFORM_TRANSPARENT_ADDRESS || "ANY_TADDR";
       const opidOrTxid = await this.call<string>("z_sendmany", [fromAddr, recipients, 1, 0.0001]);
       if (typeof opidOrTxid === "string") {
         if (opidOrTxid.startsWith("opid-")) {
@@ -546,8 +571,8 @@ export class ZalletClient {
     // 2. Autonomous Shielded Escrow Payout Builder & Broadcaster
     const wasm = await getWasmEngine();
     const escrowSpendingKey = process.env.ESCROW_PLATFORM_SPENDING_KEY;
-    const escrowTransparentAddr = process.env.ESCROW_PLATFORM_TRANSPARENT_ADDRESS;
-    const escrowTransparentKey = process.env.ESCROW_PLATFORM_TRANSPARENT_KEY;
+    const escrowTransparentAddr = customEscrowAddress || process.env.ESCROW_PLATFORM_TRANSPARENT_ADDRESS;
+    const escrowTransparentKey = customEscrowKey || process.env.ESCROW_PLATFORM_TRANSPARENT_KEY;
 
     if (!escrowSpendingKey && (!escrowTransparentAddr || !escrowTransparentKey)) {
       throw new Error("ESCROW_WALLET_MISCONFIGURED: Platform escrow spending key missing from environment.");
@@ -597,6 +622,8 @@ export class ZalletClient {
               }
               throw new Error(`TRANSACTION_BROADCAST_REJECTED: Node rejected transaction: ${JSON.stringify(broadcastTxid)}`);
             }
+          } else if (customEscrowAddress) {
+            throw new Error(`ESCROW_UTXO_INSUFFICIENT: Per-tip escrow address ${customEscrowAddress} has ${accumulatedZats} zats available, but requires ${targetZats} zats. Please wait for the funding transaction to be confirmed on-chain.`);
           }
         }
 
@@ -644,6 +671,18 @@ export class ZalletClient {
 
           // Sync tree state before note's block
           const noteHeight = noteToSpend.blockHeight || (currentHeight - 1);
+          const ageBlocks = currentHeight - noteHeight;
+
+          // Consensus Guard: Zcash strictly requires anchors to be within the last 100 blocks
+          if (ageBlocks > 95) {
+            throw new Error(`ESCROW_ANCHOR_EXPIRED: Escrow note from block ${noteHeight} is ${ageBlocks} blocks old (consensus window is 100 blocks). Settlement requires platform vault liquidity.`);
+          }
+
+          // Serverless Guard: Never compute synchronous Halo 2 proofs on Vercel to prevent 504 timeouts
+          if (process.env.VERCEL === "1") {
+            throw new Error("SERVERLESS_PROVING_DISABLED: Serverless functions cannot compute 60-second Halo 2 ZK proofs. Please use client-side PCZT proving or transparent vault disbursement.");
+          }
+
           const prevHeight = noteHeight - 1;
           const tsData = await this.call<any>("z_gettreestate", [String(prevHeight)]);
           const stateHex = tsData?.ironwood?.commitments?.finalState || tsData?.orchard?.commitments?.finalState;

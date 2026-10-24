@@ -4,6 +4,7 @@ import { Tip, ITip } from "@/models/Tip";
 import { PaymentRequest, IPaymentRequest } from "@/models/PaymentRequest";
 import { PaymentLink, IPaymentLink } from "@/models/PaymentLink";
 import { generateValidZcashAddress, validateZcashAddress, zallet, ALLOW_PAYMENT_SIMULATION } from "@/lib/zcash";
+import { deriveTipEscrowKeypair } from "@/lib/escrow/tip-escrow-keys";
 import { checkPayoutCircuitBreaker } from "@/lib/payout-controls";
 import crypto from "crypto";
 
@@ -38,10 +39,11 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
 async function isTxidAlreadyUsed(txid: string, excludeId?: string): Promise<boolean> {
   const cleanTxid = txid.trim();
 
-  // Only check memoryStore if we have no excludeId to compare against.
-  // When re-verifying the same tip/request (e.g. FUNDING_DETECTED -> FUNDED reconciliation),
-  // the txid is legitimately already in the set for THIS record, so skip the blind cache check.
-  if (!excludeId && memoryStore.usedTxids.has(cleanTxid)) {
+  // Check in-memory store for unit test & local mock environments
+  const inMemReq = memoryStore.requests.find((r) => r.paidTxid === cleanTxid && r._id !== excludeId && r.id !== excludeId);
+  const inMemLink = memoryStore.paylinks.find((l) => l.paidTxid === cleanTxid && l.slug !== excludeId && l._id !== excludeId);
+  const inMemTip = memoryStore.tips.find((t) => (t.claimTxid === cleanTxid || t.fundingTxid === cleanTxid) && t._id !== excludeId && t.id !== excludeId);
+  if (inMemReq || inMemLink || inMemTip) {
     return true;
   }
 
@@ -307,11 +309,12 @@ export const dbService = {
     isAnonymous?: boolean;
     memo?: string;
   }) {
-    const escrow = await zallet.getNewEscrowAddress();
-    const transparentEscrow = zallet.getEscrowTransparentAddress();
+    const tipId = new mongoose.Types.ObjectId().toString();
+    const { address: tipTransparentEscrow } = deriveTipEscrowKeypair(tipId);
     const amountZats = Math.round(params.amountZec * 100000000);
 
-    const tipPayload = {
+    const tipPayload: any = {
+      _id: tipId,
       senderUserId: params.senderUserId,
       senderUsernameSnapshot: params.senderUsername,
       recipientXUserId: params.recipientXUserId,
@@ -320,10 +323,10 @@ export const dbService = {
       amountZec: params.amountZec,
       isAnonymous: params.isAnonymous ?? true,
       memo: params.memo,
-      escrowAddress: escrow.unifiedAddress,
-      escrowDepositAddress: escrow.unifiedAddress,
-      transparentDepositAddress: transparentEscrow,
-      diversifierIndex: escrow.diversifierIndex,
+      escrowAddress: tipTransparentEscrow,
+      escrowDepositAddress: tipTransparentEscrow,
+      transparentDepositAddress: tipTransparentEscrow,
+      diversifierIndex: "0000000000000000000000",
       status: "CREATED" as const,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       createdAt: new Date(),
@@ -341,9 +344,9 @@ export const dbService = {
 
       // Store in memory fallback (dev only)
       const inMemTip = {
-        _id: `tip_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        id: `tip_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        id: tipId,
         ...tipPayload,
+        _id: tipId,
       };
       memoryStore.tips.unshift(inMemTip);
       return inMemTip;
@@ -506,14 +509,19 @@ export const dbService = {
 
     const netPayoutZec = Math.round((tipDoc.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000;
 
-    // Dispatch Shielded Payout
+    // Dispatch Payout directly from the Tip's Unique Escrow Address
     try {
+      const tipKey = deriveTipEscrowKeypair(tipId);
+      const tipEscrowAddr = tipDoc.transparentDepositAddress || tipDoc.escrowDepositAddress || tipKey.address;
+
       const payoutResult = await zallet.sendShieldedPayout(
         recipientShieldedAddress,
         netPayoutZec,
         tipDoc.memo || "VeilX Shielded Claim",
         undefined,
-        tipDoc.fundingTxid
+        tipDoc.fundingTxid,
+        tipEscrowAddr,
+        tipKey.privateKeyHex
       );
 
       if (payoutResult.isAsync && payoutResult.opid) {

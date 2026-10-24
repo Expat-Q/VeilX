@@ -282,96 +282,11 @@ export function ClaimModal({
     }
 
     try {
-      // 1. Pure Shielded Claim with Client-Side PCZT (ZIP-374)
-      if (addressValidation?.type === "unified") {
-        setClaimState("PREPARING");
-        setProverPercent(15);
-        setProverMessage("Preparing client-side zero-knowledge transaction...");
+      // 1. Direct Instant Escrow Disbursement (Sub-second settlement)
+      setClaimState("PREPARING");
+      setProverPercent(35);
+      setProverMessage("Signing and broadcasting escrow payout transaction...");
 
-        const prepRes = await fetch("/api/escrow/pczt-prepare", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...itemPayload,
-            destinationAddress: recipientAddress.trim(),
-          }),
-        });
-
-        const prepData = await prepRes.json().catch(() => ({}));
-        if (!prepRes.ok || !prepData.success) {
-          throw new Error(prepData.error || "Failed to prepare shielded escrow transaction.");
-        }
-
-        setClaimState("PROVING");
-        setProverStage("PROVING");
-        setProverPercent(25);
-        setProverMessage("Generating zero-knowledge proof...");
-
-        const { result: provedResult } = await proveEscrowPcztInWorker(
-          prepData.pcztParams,
-          (progress: ProverProgress) => {
-            setProverStage(progress.stage);
-            // Scale progress gracefully between 25% and 85%
-            const mappedPercent = Math.max(
-              25,
-              Math.min(85, Math.round(25 + progress.percent * 0.6))
-            );
-            setProverPercent(mappedPercent);
-            if (progress.stage === "PROVING") {
-              setProverMessage("Generating zero-knowledge proof...");
-            } else if (progress.stage === "FINALIZING") {
-              setProverMessage("Finalizing transaction cryptographic proof...");
-            } else {
-              setProverMessage(progress.message || "Generating zero-knowledge proof...");
-            }
-          }
-        );
-
-        setClaimState("FINALIZING");
-        setProverStage("FINALIZING");
-        setProverPercent(95);
-        setProverMessage("Submitting shielded transaction to Zcash consensus nodes...");
-
-        const finalizeRes = await fetch("/api/escrow/pczt-finalize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...itemPayload,
-            destinationAddress: recipientAddress.trim(),
-            pcztParams: prepData.pcztParams,
-            expiryHeight: prepData.expiryHeight,
-            consensusBranchId: prepData.consensusBranchId,
-            provedResult,
-          }),
-        });
-
-        let finalizeData = await finalizeRes.json().catch(() => ({}));
-        if (!finalizeRes.ok || !finalizeData.success) {
-          // Resilient fallback to native claim endpoint
-          if (tip.id && !tip.slug && !tip.id.startsWith("req_")) {
-            const fallbackRes = await fetch(`/api/tips/${tip.id}/claim`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ recipientShieldedAddress: recipientAddress.trim() }),
-            });
-            const fallbackData = await fallbackRes.json().catch(() => ({}));
-            if (fallbackRes.ok && fallbackData.success) {
-              finalizeData = fallbackData;
-            } else {
-              throw new Error(finalizeData.error || fallbackData.error || "Failed to finalize and broadcast transaction.");
-            }
-          } else {
-            throw new Error(finalizeData.error || "Failed to finalize and broadcast transaction.");
-          }
-        }
-
-        setOutflowTxid(finalizeData.txid || finalizeData.claimTxid || "Broadcasted");
-        setClaimState("SUCCESS");
-        if (onClaimSuccess) onClaimSuccess(tip.id);
-        return;
-      }
-
-      // 2. Transparent Outflow Fallback
       let res: Response;
       if (tip.slug) {
         res = await fetch(`/api/paylinks/${tip.slug}/retry-forward`, {
@@ -399,24 +314,90 @@ export function ClaimModal({
       try {
         data = await res.json();
       } catch {
-        data = {
-          error:
-            res.status === 502 || res.status === 504
-              ? "Zero-knowledge proof generation timed out at gateway. Escrow disbursement is processing in the background."
-              : `Service response error (${res.status}). Please retry shortly.`,
-        };
+        data = {};
       }
 
       if (res.ok && data.success) {
+        setProverPercent(100);
         if (data.status === "PENDING_VERIFICATION") {
           setPayoutOpid(data.payoutOpid || null);
         }
         setOutflowTxid(data.claimTxid || data.forwardTxid || "Broadcasted");
         setClaimState("SUCCESS");
         if (onClaimSuccess) onClaimSuccess(tip.id);
-      } else {
-        throw new Error(data.error || "Failed to claim funds. Please check the address and try again.");
+        return;
       }
+
+      // 2. Shielded PCZT Client Prover Fallback (if direct settlement requires client-side proof)
+      if (addressValidation?.type === "unified") {
+        setProverPercent(15);
+        setProverMessage("Preparing zero-knowledge escrow transaction...");
+
+        const prepRes = await fetch("/api/escrow/pczt-prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...itemPayload,
+            destinationAddress: recipientAddress.trim(),
+          }),
+        });
+
+        const prepData = await prepRes.json().catch(() => ({}));
+        if (prepRes.ok && prepData.success) {
+          setClaimState("PROVING");
+          setProverStage("PROVING");
+          setProverPercent(25);
+          setProverMessage("Generating zero-knowledge proof...");
+
+          const { result: provedResult } = await proveEscrowPcztInWorker(
+            prepData.pcztParams,
+            (progress: ProverProgress) => {
+              setProverStage(progress.stage);
+              const mappedPercent = Math.max(
+                25,
+                Math.min(85, Math.round(25 + progress.percent * 0.6))
+              );
+              setProverPercent(mappedPercent);
+              if (progress.stage === "PROVING") {
+                setProverMessage("Generating zero-knowledge proof...");
+              } else if (progress.stage === "FINALIZING") {
+                setProverMessage("Finalizing transaction cryptographic proof...");
+              } else {
+                setProverMessage(progress.message || "Generating zero-knowledge proof...");
+              }
+            }
+          );
+
+          setClaimState("FINALIZING");
+          setProverStage("FINALIZING");
+          setProverPercent(95);
+          setProverMessage("Submitting shielded transaction to Zcash consensus nodes...");
+
+          const finalizeRes = await fetch("/api/escrow/pczt-finalize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...itemPayload,
+              destinationAddress: recipientAddress.trim(),
+              pcztParams: prepData.pcztParams,
+              expiryHeight: prepData.expiryHeight,
+              consensusBranchId: prepData.consensusBranchId,
+              provedResult,
+            }),
+          });
+
+          const finalizeData = await finalizeRes.json().catch(() => ({}));
+          if (finalizeRes.ok && finalizeData.success) {
+            setOutflowTxid(finalizeData.txid || finalizeData.claimTxid || "Broadcasted");
+            setClaimState("SUCCESS");
+            if (onClaimSuccess) onClaimSuccess(tip.id);
+            return;
+          }
+        }
+      }
+
+      // If both fast path and PCZT failed, handle error
+      throw new Error(data.error || "Failed to process tip claim. Please check your recipient address and retry.");
     } catch (err: any) {
       console.warn("[ClaimModal] Claim error:", err);
       const { friendly, technical } = sanitizeErrorMessage(err);

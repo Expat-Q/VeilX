@@ -21,15 +21,17 @@ export interface ITip extends Document {
   memo?: string;
 
   // Escrow Address
-  escrowAddress: string;             // Unique diversified UA (u1test1...)
+  escrowAddress: string;             // Unique diversified UA or transparent escrow
   escrowDepositAddress?: string;     // Active deposit vault (t1...)
-  diversifierIndex: string;          // 11-byte hex diversifier index
+  transparentDepositAddress?: string;// Dedicated per-tip transparent escrow address (t1...)
+  diversifierIndex?: string;         // 11-byte hex diversifier index
 
   // State Machine
   status: TipStatus;
 
   // Blockchain & Claim Operation Data
   fundingTxid?: string;
+  fundingVout?: number;
   fundingBlockHeight?: number;
   claimTxid?: string;
   payoutOpid?: string;
@@ -58,7 +60,9 @@ const TipSchema = new Schema<ITip>(
 
     escrowAddress: { type: String, required: true, index: true },
     escrowDepositAddress: { type: String, index: true },
-    diversifierIndex: { type: String, required: true },
+    transparentDepositAddress: { type: String, index: true },
+    diversifierIndex: { type: String, default: "0000000000000000000000" },
+    fundingVout: { type: Number, default: 0 },
 
     status: {
       type: String,

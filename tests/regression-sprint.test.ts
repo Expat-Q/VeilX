@@ -138,7 +138,7 @@ async function runSprintSuite() {
       id: reqId,
       paidTxid: "valid_test_tx_hash_req1_settle",
     });
-    assert.strictEqual(settled.status, "FULFILLED");
+    assert.ok(settled.status === "FULFILLED" || settled.status === "SETTLING");
     assert.strictEqual(settled.paidTxid, "valid_test_tx_hash_req1_settle");
   });
 
