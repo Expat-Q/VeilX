@@ -8,7 +8,9 @@ export type TipStatus =
   | "PENDING_VERIFICATION"
   | "CLAIMED"
   | "CANCELLED"
-  | "EXPIRED";
+  | "EXPIRED"
+  | "SETTLED"
+  | "FAILED";
 
 export interface ITip extends Document {
   senderUserId?: mongoose.Types.ObjectId;
@@ -40,6 +42,7 @@ export interface ITip extends Document {
   recipientShieldedAddress?: string;
 
   claimLockId?: string;
+  claimAttemptAt?: Date;
   claimedAt?: Date;
   expiresAt?: Date;
   expiredAt?: Date;
@@ -75,6 +78,8 @@ const TipSchema = new Schema<ITip>(
         "CLAIMED",
         "CANCELLED",
         "EXPIRED",
+        "SETTLED",
+        "FAILED",
       ],
       default: "CREATED",
       index: true,
@@ -95,6 +100,7 @@ const TipSchema = new Schema<ITip>(
     fundingBlockHeight: { type: Number },
     claimTxid: {
       type: String,
+      unique: true,
       sparse: true,
       index: true,
       match: [
@@ -106,6 +112,7 @@ const TipSchema = new Schema<ITip>(
     },
     payoutOpid: { type: String, index: true },
     payoutSubmittedAt: { type: Date },
+    claimAttemptAt: { type: Date },
     payoutError: { type: String },
     recipientShieldedAddress: { type: String },
     claimLockId: { type: String, index: true },

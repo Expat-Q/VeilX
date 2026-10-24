@@ -972,7 +972,7 @@ mod tests {
                 let ask = redpallas::SigningKey::<SpendAuth>::try_from(ask_bytes).unwrap();
                 let dummy_rk: redpallas::VerificationKey<SpendAuth> = (&ask).into();
                 let dummy_cv: Option<ValueCommitment> = ValueCommitment::from_bytes(&pallas::Point::generator().to_bytes()).into();
-                if let (Some(cv), Some(cv2)) = (dummy_cv.clone(), dummy_cv) {
+                if let (Some(_cv), Some(cv2)) = (dummy_cv.clone(), dummy_cv) {
                     if let Ok(action) = Action::from_parts(nf, dummy_rk, cm, transmitted, cv2, ()) {
                         let iw_domain = IronwoodDomain::for_action(&action);
                         for scope in [Scope::External, Scope::Internal] {

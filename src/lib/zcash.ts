@@ -12,6 +12,58 @@ const ZALLET_RPC_USER = process.env.ZALLET_RPC_USER || "xtip_user";
 const ZALLET_RPC_PASS = process.env.ZALLET_RPC_PASS || "xtip_password_123";
 export const ZCASH_NETWORK: Network = (process.env.NEXT_PUBLIC_ZCASH_NETWORK as Network) || "mainnet";
 
+export interface ZcashNetworkConfig {
+  network: "mainnet" | "testnet";
+  consensusBranchId: number; // Nu5: 0xc2d6d0b4 for mainnet, 0xb5fbcc0c for testnet
+  consensusBranchIdHex: string;
+  versionGroupId: number; // 0x26a7270a
+  transparentPrefix: {
+    p2pkh: number[]; // [0x1c, 0xb8] (t1) or [0x1d, 0x25] (tm)
+    p2sh: number[];
+  };
+  coinType: number; // 133 for mainnet, 1 for testnet
+  explorerTxUrl: (txid: string) => string;
+  explorerAddressUrl: (address: string) => string;
+}
+
+export const NETWORK_CONFIGS: Record<"mainnet" | "testnet", ZcashNetworkConfig> = {
+  mainnet: {
+    network: "mainnet",
+    consensusBranchId: 0xc2d6d0b4,
+    consensusBranchIdHex: "c2d6d0b4",
+    versionGroupId: 0x26a7270a,
+    transparentPrefix: {
+      p2pkh: [0x1c, 0xb8],
+      p2sh: [0x1c, 0xbd],
+    },
+    coinType: 133,
+    explorerTxUrl: (txid: string) => `https://zcashblockexplorer.com/transactions/${txid}`,
+    explorerAddressUrl: (address: string) => `https://zcashblockexplorer.com/address/${address}`,
+  },
+  testnet: {
+    network: "testnet",
+    consensusBranchId: 0xb5fbcc0c,
+    consensusBranchIdHex: "b5fbcc0c",
+    versionGroupId: 0x26a7270a,
+    transparentPrefix: {
+      p2pkh: [0x1d, 0x25],
+      p2sh: [0x1c, 0xba],
+    },
+    coinType: 1,
+    explorerTxUrl: (txid: string) => `https://testnet.zcashblockexplorer.com/transactions/${txid}`,
+    explorerAddressUrl: (address: string) => `https://testnet.zcashblockexplorer.com/address/${address}`,
+  },
+};
+
+export function getNetworkConfig(network: Network = ZCASH_NETWORK): ZcashNetworkConfig {
+  const norm: "mainnet" | "testnet" = network === "testnet" ? "testnet" : "mainnet";
+  return NETWORK_CONFIGS[norm];
+}
+
+export function getExplorerUrl(txid: string, network: Network = ZCASH_NETWORK): string {
+  return getNetworkConfig(network).explorerTxUrl(txid);
+}
+
 /**
  * Strict Environment Gating for Simulation
  * Simulation is NEVER allowed in production (NODE_ENV === 'production') or on Mainnet.
@@ -115,7 +167,7 @@ export interface ShieldedV6TransactionParams {
  * Conforms strictly to the canonical Zcash network wire protocol.
  */
 export function serializeV6ShieldedTransaction(params: ShieldedV6TransactionParams): string {
-  const branchId = params.consensusBranchId ?? 0x37a5165b;
+  const branchId = params.consensusBranchId ?? getNetworkConfig().consensusBranchId;
   const chunks: Buffer[] = [];
 
   // 1. Header (4 bytes: v6 + overwintered)
@@ -192,6 +244,219 @@ export function serializeV6ShieldedTransaction(params: ShieldedV6TransactionPara
   chunks.push(Buffer.from(params.bindingSigHex, "hex"));
 
   return Buffer.concat(chunks).toString("hex");
+}
+
+export interface ShieldedV5TransactionParams {
+  consensusBranchId?: number;
+  lockTime?: number;
+  expiryHeight: number;
+  transparentInput: {
+    txid: string; // 64 hex chars
+    vout: number;
+    scriptSigHex: string; // DER signature + pubkey unlock script
+    sequence?: number;
+  };
+  orchardBundle: {
+    actions: Array<{
+      cv: string;
+      nullifier: string;
+      rk: string;
+      cmx: string;
+      ephemeralKey: string;
+      encCiphertext: string;
+      outCiphertext: string;
+    }>;
+    flags: number; // 0x01: spendsDisabled=1, outputsEnabled=1
+    valueBalanceZats: bigint | number;
+    anchorHex?: string; // 64 hex zeros (Anchor::empty_tree())
+    proofHex: string;
+    spendAuthSigs?: string[];
+    bindingSigHex: string;
+  };
+}
+
+/**
+ * Serializes an authorized Zcash Version 5 (ZIP-225 / NU5) shielding transaction.
+ * Features 1 transparent input, exactly 0 transparent outputs, empty sapling, and Orchard action bundle.
+ */
+export function serializeV5ShieldingTransaction(params: ShieldedV5TransactionParams): string {
+  const branchId = params.consensusBranchId ?? getNetworkConfig().consensusBranchId;
+  const chunks: Buffer[] = [];
+
+  // 1. Header (4 bytes: v5 + overwintered 0x80000005)
+  const headerBuf = Buffer.alloc(4);
+  headerBuf.writeUInt32LE(0x80000005, 0);
+  chunks.push(headerBuf);
+
+  // 2. VersionGroupId (4 bytes: 0x26A7270A)
+  const vgroupIdBuf = Buffer.alloc(4);
+  vgroupIdBuf.writeUInt32LE(0x26a7270a, 0);
+  chunks.push(vgroupIdBuf);
+
+  // 3. ConsensusBranchId (4 bytes LE)
+  const branchBuf = Buffer.alloc(4);
+  branchBuf.writeUInt32LE(branchId, 0);
+  chunks.push(branchBuf);
+
+  // 4. LockTime (4 bytes LE)
+  const lockBuf = Buffer.alloc(4);
+  lockBuf.writeUInt32LE(params.lockTime ?? 0, 0);
+  chunks.push(lockBuf);
+
+  // 5. ExpiryHeight (4 bytes LE)
+  const expBuf = Buffer.alloc(4);
+  expBuf.writeUInt32LE(params.expiryHeight, 0);
+  chunks.push(expBuf);
+
+  // 6. Transparent Inputs: 1 input
+  chunks.push(writeCompactSize(1));
+  const txidBytes = Buffer.from(params.transparentInput.txid, "hex").reverse();
+  chunks.push(txidBytes);
+  const voutBuf = Buffer.alloc(4);
+  voutBuf.writeUInt32LE(params.transparentInput.vout, 0);
+  chunks.push(voutBuf);
+  const scriptSigBuf = Buffer.from(params.transparentInput.scriptSigHex, "hex");
+  chunks.push(writeCompactSize(scriptSigBuf.length));
+  chunks.push(scriptSigBuf);
+  const seqBuf = Buffer.alloc(4);
+  seqBuf.writeUInt32LE(params.transparentInput.sequence ?? 0xffffffff, 0);
+  chunks.push(seqBuf);
+
+  // 7. Transparent Outputs: EXACTLY 0 (ZIP-225 Shielding invariant: zero transparent recipient outputs)
+  chunks.push(writeCompactSize(0));
+
+  // 8. Sapling Spends: 0
+  chunks.push(writeCompactSize(0));
+  // 9. Sapling Outputs: 0
+  chunks.push(writeCompactSize(0));
+
+  // 10. Orchard Bundle
+  const orchard = params.orchardBundle;
+  const nActions = orchard.actions.length;
+  chunks.push(writeCompactSize(nActions));
+
+  for (const act of orchard.actions) {
+    chunks.push(Buffer.from(act.cv, "hex"));
+    chunks.push(Buffer.from(act.nullifier, "hex"));
+    chunks.push(Buffer.from(act.rk, "hex"));
+    chunks.push(Buffer.from(act.cmx, "hex"));
+    chunks.push(Buffer.from(act.ephemeralKey, "hex"));
+    chunks.push(Buffer.from(act.encCiphertext, "hex"));
+    chunks.push(Buffer.from(act.outCiphertext, "hex"));
+  }
+
+  // Flags: 1 byte (0x01: spendsDisabled=1, outputsEnabled=1)
+  chunks.push(Buffer.from([orchard.flags]));
+
+  // ValueBalance: 8 bytes i64 LE (negative value for outflow into Orchard)
+  const valBuf = Buffer.alloc(8);
+  valBuf.writeBigInt64LE(BigInt(orchard.valueBalanceZats), 0);
+  chunks.push(valBuf);
+
+  // Anchor: 32 bytes (64 zeros for empty tree anchor)
+  const anchorHex = orchard.anchorHex && orchard.anchorHex.length === 64
+    ? orchard.anchorHex
+    : "0000000000000000000000000000000000000000000000000000000000000000";
+  chunks.push(Buffer.from(anchorHex, "hex"));
+
+  // Proof: CompactSize length + proof bytes
+  const proofBuf = Buffer.from(orchard.proofHex, "hex");
+  chunks.push(writeCompactSize(proofBuf.length));
+  chunks.push(proofBuf);
+
+  // SpendAuthSigs: 0 for shielding (spendsDisabled = true)
+  if (orchard.spendAuthSigs && orchard.spendAuthSigs.length > 0) {
+    for (const sig of orchard.spendAuthSigs) {
+      chunks.push(Buffer.from(sig, "hex"));
+    }
+  }
+
+  // BindingSig: 64 bytes
+  const bindingSigBuf = Buffer.from(orchard.bindingSigHex, "hex");
+  chunks.push(bindingSigBuf);
+
+  return Buffer.concat(chunks).toString("hex");
+}
+
+/**
+ * Decodes a transparent P2PKH address into standard 25-byte scriptPubKey hex:
+ * OP_DUP OP_HASH160 <20 bytes hash160> OP_EQUALVERIFY OP_CHECKSIG
+ */
+export function addressToP2pkhScriptHex(address: string): string {
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const bytes: number[] = [0];
+  for (let i = 0; i < address.length; i++) {
+    const idx = ALPHABET.indexOf(address[i]);
+    if (idx === -1) throw new Error(`Invalid Base58 character in address: ${address[i]}`);
+    let carry = idx;
+    for (let j = 0; j < bytes.length; j++) {
+      carry += bytes[j] * 58;
+      bytes[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (let i = 0; i < address.length && address[i] === "1"; i++) {
+    bytes.push(0);
+  }
+  bytes.reverse();
+  // Strip 2-byte network prefix and 4-byte checksum to get 20-byte hash160
+  if (bytes.length < 26) {
+    throw new Error(`Invalid transparent address payload length: ${bytes.length}`);
+  }
+  const hash160 = Buffer.from(bytes.slice(2, 22)).toString("hex");
+  return `76a914${hash160}88ac`;
+}
+
+/**
+ * Signs a transparent P2PKH input using the secp256k1 private key and canonical sighash digest.
+ * Returns the hex-encoded scriptSig (<sig + 0x01> <compressed_pubkey>).
+ */
+export function signP2pkhInput(privateKeyHex: string, sighashHex: string): string {
+  const privBytes = Buffer.from(privateKeyHex, "hex");
+  const pubBytes = Buffer.from(secp256k1.getPublicKey(privBytes, true)); // 33 bytes compressed
+  const sig = secp256k1.sign(Buffer.from(sighashHex, "hex"), privBytes);
+  const der = sig.toDERRawBytes();
+
+  // scriptSig = <der_len + 1> <der> 0x01 (SIGHASH_ALL) <pub_len> <pubkey>
+  const sigWithHashType = Buffer.concat([Buffer.from(der), Buffer.from([0x01])]);
+  const scriptSig = Buffer.concat([
+    writeCompactSize(sigWithHashType.length),
+    sigWithHashType,
+    writeCompactSize(pubBytes.length),
+    pubBytes,
+  ]);
+  return scriptSig.toString("hex");
+}
+
+/**
+ * Extracts the raw 43-byte (86 hex characters) Orchard receiver from a Unified Address,
+ * Orchard raw address, or raw hex string.
+ */
+export async function extractRawOrchardAddressHex(address: string, wasm?: any): Promise<string> {
+  const clean = address.trim();
+  // 1. Direct raw 43-byte hex
+  if (/^[0-9a-fA-F]{86}$/.test(clean)) {
+    return clean.toLowerCase();
+  }
+
+  // 2. Decode from Unified Address (u1... or utest1...)
+  if (clean.startsWith("u1") || clean.startsWith("utest1")) {
+    const engine = wasm || (await getWasmEngine());
+    if (engine && typeof engine.decode_unified_address === "function") {
+      const decoded = engine.decode_unified_address(clean);
+      if (decoded?.orchard_raw_hex) {
+        return decoded.orchard_raw_hex.toLowerCase();
+      }
+    }
+  }
+
+  throw new Error(
+    `DESTINATION_ORCHARD_REQUIRED: Destination address '${address}' does not contain an Orchard shielded receiver (43 bytes / 86 hex characters).`
+  );
 }
 
 export class ZalletClient {
@@ -597,7 +862,7 @@ export class ZalletClient {
           }
 
           if (accumulatedZats >= targetZats) {
-            const branchId = 0x37A5165B;
+            const branchId = getNetworkConfig().consensusBranchId;
             const signed = wasm.build_and_sign_transaction({
               private_key_hex: escrowTransparentKey,
               utxos: selectedUtxos.map((u) => ({
@@ -739,12 +1004,12 @@ export class ZalletClient {
               change_zatoshis: 0n,
               anchor_hex: blockAnchor,
               expiry_height: expiryHeight,
-              consensus_branch_id: 0x37a5165b,
+              consensus_branch_id: getNetworkConfig().consensusBranchId,
               lock_time: 0,
             });
 
             const rawTxHex = serializeV6ShieldedTransaction({
-              consensusBranchId: 0x37a5165b,
+              consensusBranchId: getNetworkConfig().consensusBranchId,
               expiryHeight,
               lockTime: 0,
               actions: spendBundle.actions,

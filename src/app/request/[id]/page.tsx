@@ -16,6 +16,7 @@ import {
   AlertCircle,
   ExternalLink,
   CheckCircle2,
+  RefreshCw,
 } from "lucide-react";
 import { QRDisplay } from "@/components/ui/QRDisplay";
 import { Button } from "@/components/ui/Button";
@@ -23,7 +24,11 @@ import { useZecPrice } from "@/lib/price-service";
 import { buildZip321Uri } from "@/lib/wallet";
 import { InvoiceReceiptCard } from "@/components/ui/InvoiceReceiptCard";
 import { getZcashExplorerUrl, truncateAddress } from "@/lib/utils";
-import { proveEscrowPcztInWorker, prewarmProverInBackground, ProverProgress } from "@/lib/pczt/pczt-client-prover";
+import {
+  proveShieldingInWorker,
+  prewarmProverInBackground,
+} from "@/lib/pczt/worker-client";
+import { ProverWorkerProgressOutput } from "@/types/pczt";
 
 export default function RequestDetailsPage() {
   const params = useParams();
@@ -71,15 +76,27 @@ export default function RequestDetailsPage() {
             if (data.request.status === "CANCELLED") {
               setIsCancelled(true);
               setIsSettling(false);
-            } else if (
-              data.request.status === "FULFILLED" ||
-              data.request.forwardTxid ||
-              data.request.paidTxid ||
-              data.request.status === "SETTLING" ||
-              data.request.status === "FORWARD_PENDING"
-            ) {
-              setIsPaid(true);
-              setIsSettling(false);
+            } else {
+              // SEC-03, FE-01: Decouple settlement from receipt.
+              // Only confirm isPaid when forwardTxid is verified on-chain.
+              const hasVerifiedForward = Boolean(data.request.forwardTxid);
+              const isConfirmedSettled =
+                (data.request.status === "FULFILLED" ||
+                  data.request.status === "PAID" ||
+                  data.request.status === "SETTLED") &&
+                hasVerifiedForward;
+
+              if (isConfirmedSettled) {
+                setIsPaid(true);
+                setIsSettling(false);
+              } else if (
+                data.request.status === "SETTLING" ||
+                data.request.status === "FORWARD_PENDING" ||
+                Boolean(data.request.paidTxid)
+              ) {
+                setIsPaid(false);
+                setIsSettling(true);
+              }
             }
           }
         })
@@ -90,12 +107,12 @@ export default function RequestDetailsPage() {
     fetchRequest();
     prewarmProverInBackground();
 
-    // Poll every 4 seconds to track status and forward confirmations
+    // Poll every 3.5 seconds to track status and forward confirmations
     const interval = setInterval(() => {
       if (!isCancelled && !requestData?.forwardTxid && !isProvingRef.current) {
         fetchRequest();
       }
-    }, 4000);
+    }, 3500);
 
     return () => clearInterval(interval);
   }, [requestId, isCancelled, requestData?.forwardTxid]);
@@ -105,10 +122,14 @@ export default function RequestDetailsPage() {
   const [proverMessage, setProverMessage] = useState<string>("");
   const isProvingRef = useRef(false);
 
+  const activeDepositTxid = requestData?.paidTxid || submittedTxid || manualTxid;
+
   // Background auto-forwarding attempt (non-blocking for payer)
   useEffect(() => {
-    if (!isPaid || requestData?.forwardTxid || isProvingRef.current || !requestId) return;
-    if (!requestData?.paidTxid && !submittedTxid && !manualTxid) return;
+    const hasDetectedPayment = Boolean(activeDepositTxid || isSettling);
+    if (!hasDetectedPayment || requestData?.forwardTxid || isProvingRef.current || !requestId) {
+      return;
+    }
 
     let cancelled = false;
 
@@ -125,7 +146,7 @@ export default function RequestDetailsPage() {
         isProvingRef.current = true;
         setProverStage("PREPARING");
         setProverPercent(20);
-        setProverMessage("Preparing secure transfer to requester...");
+        setProverMessage("Preparing secure shielded transfer to requester...");
 
         const prepRes = await fetch("/api/escrow/pczt-prepare", {
           method: "POST",
@@ -133,27 +154,22 @@ export default function RequestDetailsPage() {
           body: JSON.stringify({ requestId }),
         });
         const prepData = await prepRes.json().catch(() => ({}));
-        if (cancelled || !prepRes.ok || !prepData.success) {
+        if (cancelled || !prepRes.ok || !prepData.success || !prepData.pcztParams) {
           isProvingRef.current = false;
-          setProverStage("");
           return;
         }
 
         setProverStage("PROVING");
-        setProverPercent(30);
-        setProverMessage("Securing payment on your device...");
+        setProverPercent(35);
+        setProverMessage("Securing payment on your device (Halo 2 ZK proof)...");
 
-        const { result: provedResult } = await proveEscrowPcztInWorker(
+        const proverResult = await proveShieldingInWorker(
           prepData.pcztParams,
-          (progress: ProverProgress) => {
+          (progress: ProverWorkerProgressOutput) => {
             if (cancelled) return;
             setProverStage(progress.stage);
             setProverPercent(progress.percent);
-            if (progress.stage === "PROVING") {
-              setProverMessage("Generating zero-knowledge proof for disbursement...");
-            } else if (progress.stage === "FINALIZING") {
-              setProverMessage("Finalizing with Zcash network...");
-            }
+            setProverMessage(progress.message);
           }
         );
 
@@ -161,21 +177,20 @@ export default function RequestDetailsPage() {
 
         setProverStage("FINALIZING");
         setProverPercent(95);
-        setProverMessage("Broadcasting disbursement to Zcash network...");
+        setProverMessage("Broadcasting shielded disbursement to Zcash network...");
 
         const finalizeRes = await fetch("/api/escrow/pczt-finalize", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             requestId,
+            destinationAddress: requestData?.recipientShieldedUa,
+            proofBundle: proverResult.orchardActionBundle,
             pcztParams: prepData.pcztParams,
-            expiryHeight: prepData.expiryHeight,
-            consensusBranchId: prepData.consensusBranchId,
-            provedResult,
           }),
         });
         const finalizeData = await finalizeRes.json().catch(() => ({}));
-        if (finalizeRes.ok && finalizeData.success) {
+        if (finalizeRes.ok && finalizeData.success && finalizeData.txid) {
           setRequestData((prev) =>
             prev
               ? {
@@ -185,12 +200,13 @@ export default function RequestDetailsPage() {
                 }
               : null
           );
+          setIsPaid(true);
+          setIsSettling(false);
         }
       } catch (err) {
         console.warn("[AutoForwarder] Client proof attempt:", err);
       } finally {
         isProvingRef.current = false;
-        setProverStage("");
       }
     };
 
@@ -199,7 +215,7 @@ export default function RequestDetailsPage() {
     return () => {
       cancelled = true;
     };
-  }, [isPaid, requestId, requestData?.confirmations, requestData?.paidTxid, requestData?.forwardTxid, submittedTxid, manualTxid]);
+  }, [isSettling, requestId, requestData?.confirmations, requestData?.paidTxid, requestData?.forwardTxid, activeDepositTxid]);
 
   const handleDecline = async () => {
     setIsDeclining(true);
@@ -230,9 +246,9 @@ export default function RequestDetailsPage() {
 
     try {
       setSubmittedTxid(clean);
-      // Decouple: Immediate success display for the payer
-      setIsPaid(true);
-      setIsSettling(false);
+      // SEC-03: Switch to SETTLING state. Do NOT trigger false isPaid success.
+      setIsSettling(true);
+      setIsPaid(false);
 
       const res = await fetch(`/api/requests/${requestId}/settle`, {
         method: "POST",
@@ -242,6 +258,10 @@ export default function RequestDetailsPage() {
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success && data.request) {
         setRequestData(data.request);
+        if (data.request.forwardTxid && (data.request.status === "FULFILLED" || data.request.status === "SETTLED")) {
+          setIsPaid(true);
+          setIsSettling(false);
+        }
       }
     } catch (e: any) {
       console.warn("Manual settle submit:", e);
@@ -286,7 +306,7 @@ export default function RequestDetailsPage() {
   }
 
   const request = requestData;
-  const activeDepositTxid = request.paidTxid || submittedTxid || manualTxid;
+  const isSettlementInProgress = !isPaid && (isSettling || Boolean(activeDepositTxid) || request.status === "SETTLING" || request.status === "FORWARD_PENDING");
 
   return (
     <div className="min-h-screen bg-butter-100 flex flex-col items-center justify-center p-4 sm:p-6 text-left">
@@ -324,7 +344,114 @@ export default function RequestDetailsPage() {
               </Button>
             </Link>
           </div>
+        ) : isSettlementInProgress ? (
+          /* ============================================================== */
+          /* VIEW 1: SETTLING PROGRESS CARD (SEC-03, FE-01)                 */
+          /* ============================================================== */
+          <div className="space-y-5 animate-in fade-in zoom-in-95">
+            <div className="p-5 bg-butter-50 border border-butter-300 rounded-3xl space-y-4 text-center shadow-subtle">
+              <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
+                <div className="absolute inset-0 rounded-full bg-amber-400/20 animate-ping" />
+                <div className="w-14 h-14 bg-amber-100 text-amber-900 rounded-2xl border border-amber-300 flex items-center justify-center shadow-sm">
+                  <Loader2 className="w-7 h-7 animate-spin text-amber-700" />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-950 border border-amber-300 text-xs font-bold mb-1">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  <span>Settlement in Progress</span>
+                </div>
+                <h4 className="text-lg font-bold text-brown-950">
+                  Payment detected! Settling shielded payout...
+                </h4>
+                <p className="text-xs text-brown-600 max-w-sm mx-auto leading-relaxed">
+                  Your payment has been received. VeilX is generating a zero-knowledge proof to forward funds directly into @{request.requesterUsernameSnapshot}&apos;s private Orchard wallet.
+                </p>
+              </div>
+
+              {/* Live Real-Time Proving Progress Bar */}
+              <div className="p-3.5 bg-white border border-butter-300 rounded-2xl space-y-2.5 text-left shadow-subtle">
+                <div className="flex items-center justify-between text-xs font-bold text-brown-900">
+                  <span className="flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-brown-700" />
+                    <span>{proverStage || "PROVING"}</span>
+                  </span>
+                  <span className="font-mono text-xs font-extrabold text-brown-800">
+                    {Math.max(15, proverPercent)}%
+                  </span>
+                </div>
+
+                <div className="w-full bg-butter-200 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-brown-900 h-full rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${Math.max(15, proverPercent)}%` }}
+                  />
+                </div>
+
+                <p className="text-[11px] text-brown-600 font-medium">
+                  {proverMessage || "Securing zero-knowledge proof for private shielded disbursement..."}
+                </p>
+              </div>
+
+              {/* Deposit TxID Display */}
+              {activeDepositTxid && (
+                <div className="p-3 bg-white border border-butter-200 rounded-2xl space-y-1 text-left shadow-subtle">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-brown-400">
+                      Deposit Transaction Hash (txid)
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(activeDepositTxid);
+                          setCopiedTxid(true);
+                          setTimeout(() => setCopiedTxid(false), 2000);
+                        }}
+                        className="text-[11px] font-semibold text-brown-700 hover:text-brown-950 flex items-center gap-1 transition-colors"
+                      >
+                        {copiedTxid ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedTxid ? "Copied" : "Copy"}</span>
+                      </button>
+                      <a
+                        href={getZcashExplorerUrl(activeDepositTxid)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] font-semibold text-brown-700 hover:text-brown-950 flex items-center gap-1 transition-colors"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Explorer</span>
+                      </a>
+                    </div>
+                  </div>
+                  <p className="font-mono text-xs text-brown-900 truncate font-semibold">
+                    {truncateAddress(activeDepositTxid, 14, 12)}
+                  </p>
+                </div>
+              )}
+
+              {/* Privacy Invariant Assurance */}
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-950 text-left">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <span className="font-bold">🛡️ Genuine Shielded Payout</span>
+                  <p className="text-[11px] text-emerald-800 leading-relaxed">
+                    Zero transparent recipient outputs are created. Funds disburse strictly into shielded Orchard notes.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-center gap-2 text-[11px] text-amber-900 font-medium animate-pulse">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>Please keep this window open while shielded settlement finalizes.</span>
+              </div>
+            </div>
+          </div>
         ) : !isPaid ? (
+          /* ============================================================== */
+          /* VIEW 2: UNPAID REQUEST & QR PAYMENT                            */
+          /* ============================================================== */
           <div className="space-y-5">
             {/* Request Summary Card */}
             <div className="p-4 bg-butter-50 border border-butter-200 rounded-2xl space-y-2.5 shadow-subtle">
@@ -370,47 +497,55 @@ export default function RequestDetailsPage() {
               <div className="space-y-0.5">
                 <span className="font-bold text-emerald-900">🛡️ Direct Shielded Inflow (100% Private)</span>
                 <p className="text-[11px] text-emerald-800 leading-relaxed">
-                  Scan using your mobile Zcash wallet (Zashi, YWallet, or Noir). Your payment is received directly into our private Orchard escrow pool.
+                  Scan using your mobile Zcash wallet (Zashi, YWallet, or Noir). Your payment is held in an isolated single-use escrow before shielded disbursement.
                 </p>
               </div>
             </div>
 
-            {(() => {
-              const depositAddress =
-                request.escrowDepositAddress ||
-                "t1TqKnx7kqRU1f8bmZU568m91JLuD7t9rpq";
-              return (
-                <QRDisplay
-                  value={buildZip321Uri({
-                    address: depositAddress,
-                    amountZec: request.amountZec,
-                    memo: request.memo || "VeilX Payment Request",
-                  })}
-                  address={depositAddress}
-                  amountZec={request.amountZec}
-                  memo={request.memo || "VeilX Payment Request"}
-                  onPaymentConfirmed={async (txid) => {
-                    try {
-                      setSubmittedTxid(txid);
-                      // Decouple: Immediate success display for the payer
-                      setIsPaid(true);
-                      setIsSettling(false);
-                      const res = await fetch(`/api/requests/${requestId}/settle`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ paidTxid: txid }),
-                      });
-                      const data = await res.json().catch(() => ({}));
-                      if (res.ok && data.success && data.request) {
-                        setRequestData(data.request);
+            {/* FE-02: Address Hygiene. Show dynamic derived escrow address or clean loading state */}
+            {request.escrowDepositAddress ? (
+              <QRDisplay
+                value={buildZip321Uri({
+                  address: request.escrowDepositAddress,
+                  amountZec: request.amountZec,
+                  memo: request.memo || "VeilX Payment Request",
+                })}
+                address={request.escrowDepositAddress}
+                amountZec={request.amountZec}
+                memo={request.memo || "VeilX Payment Request"}
+                onPaymentConfirmed={async (txid) => {
+                  try {
+                    setSubmittedTxid(txid);
+                    // SEC-03: Transition to SETTLING, do not show false receipt
+                    setIsSettling(true);
+                    setIsPaid(false);
+                    const res = await fetch(`/api/requests/${requestId}/settle`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ paidTxid: txid }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok && data.success && data.request) {
+                      setRequestData(data.request);
+                      if (data.request.forwardTxid) {
+                        setIsPaid(true);
+                        setIsSettling(false);
                       }
-                    } catch (e: any) {
-                      console.warn("Failed to notify server of payment:", e);
                     }
-                  }}
-                />
-              );
-            })()}
+                  } catch (e: any) {
+                    console.warn("Failed to notify server of payment:", e);
+                  }
+                }}
+              />
+            ) : (
+              <div className="p-8 bg-butter-50 border border-butter-200 rounded-2xl flex flex-col items-center justify-center text-center space-y-3">
+                <Loader2 className="w-8 h-8 animate-spin text-brown-700" />
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-brown-950">Generating Shielded Escrow Address...</p>
+                  <p className="text-[11px] text-brown-500">Deriving unique deterministic escrow address for this request.</p>
+                </div>
+              </div>
+            )}
 
             {/* Mobile Receipt Handoff Accordion */}
             <div className="p-3.5 bg-butter-50 border border-butter-200 rounded-2xl space-y-2.5 text-left shadow-subtle">
@@ -421,7 +556,7 @@ export default function RequestDetailsPage() {
               >
                 <div className="flex items-center gap-1.5">
                   <Smartphone className="w-3.5 h-3.5 text-brown-600" />
-                  <span>Paid using Mobile Wallet (Zashi / Ywallet)?</span>
+                  <span>Paid using Mobile Wallet (Zashi / YWallet)?</span>
                 </div>
                 {showManualHandoff ? (
                   <ChevronUp className="w-4 h-4 text-brown-500" />
@@ -433,7 +568,7 @@ export default function RequestDetailsPage() {
               {showManualHandoff && (
                 <div className="space-y-2.5 pt-1 animate-in fade-in">
                   <p className="text-[11px] text-brown-600 leading-relaxed">
-                    Paste the 64-character transaction hash (txid) from your wallet to instantly verify and complete this request on-chain:
+                    Paste the 64-character transaction hash (txid) from your wallet to verify and complete this request on-chain:
                   </p>
 
                   <div className="space-y-1.5">
@@ -482,7 +617,7 @@ export default function RequestDetailsPage() {
           </div>
         ) : (
           /* ========================================================== */
-          /* DECOUPLED SUCCESS SCREEN: IMMEDIATE REASSURING RECEIPT      */
+          /* VIEW 3: VERIFIED RECEIPT SCREEN (ONLY ON CONFIRMED SETTLED)*/
           /* ========================================================== */
           <div className="py-2 text-center space-y-4 animate-in fade-in zoom-in-95">
             <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl border border-emerald-200 mx-auto flex items-center justify-center shadow-subtle">
@@ -498,8 +633,8 @@ export default function RequestDetailsPage() {
               </p>
             </div>
 
-            {/* Delivery Status Indicator */}
-            {request.forwardTxid ? (
+            {/* Verified Delivery Status Indicator */}
+            {request.forwardTxid && (
               <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between text-xs text-emerald-950 shadow-subtle text-left">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -514,39 +649,6 @@ export default function RequestDetailsPage() {
                   <span>Tx: {truncateAddress(request.forwardTxid, 5, 4)}</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
-              </div>
-            ) : proverStage ? (
-              <div className="p-3 bg-butter-50 border border-butter-200 rounded-2xl space-y-2 text-xs text-left shadow-subtle">
-                <div className="flex items-center justify-between text-brown-900 font-semibold">
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-brown-700" />
-                    <span>Delivering funds to recipient...</span>
-                  </span>
-                  {proverPercent > 0 && (
-                    <span className="font-mono font-bold text-brown-800">{proverPercent}%</span>
-                  )}
-                </div>
-                {proverPercent > 0 && (
-                  <div className="w-full h-1.5 bg-butter-200 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-brown-900 rounded-full transition-all duration-300"
-                      style={{ width: `${proverPercent}%` }}
-                    />
-                  </div>
-                )}
-                <p className="text-[11px] text-brown-600">
-                  {proverMessage || "Securing zero-knowledge proof to forward funds directly into recipient's shielded wallet."}
-                </p>
-              </div>
-            ) : (
-              <div className="p-3 bg-butter-50 border border-butter-200 rounded-2xl flex items-center gap-2.5 text-xs text-brown-900 text-left shadow-subtle">
-                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <div className="space-y-0.5">
-                  <span className="font-bold text-brown-950">Funds Safely Held in Escrow</span>
-                  <p className="text-[11px] text-brown-600 leading-relaxed">
-                    Payment Confirmed! Funds are safely held in escrow and will be disbursed directly to @{request.requesterUsernameSnapshot}.
-                  </p>
-                </div>
               </div>
             )}
 

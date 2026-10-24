@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
-export type RequestStatus = "PENDING" | "ACCEPTED" | "CANCELLED" | "SETTLING" | "FORWARD_PENDING" | "FULFILLED";
+export type RequestStatus = "PENDING" | "ACCEPTED" | "CANCELLED" | "SETTLING" | "FORWARD_PENDING" | "FULFILLED" | "SETTLED" | "FAILED";
 
 export interface IPaymentRequest extends Document {
   requesterUserId: mongoose.Types.ObjectId;
@@ -17,6 +17,8 @@ export interface IPaymentRequest extends Document {
   paidTxid?: string;
   forwardTxid?: string;
   forwardOpid?: string;
+  forwardAttemptAt?: Date;
+  claimAttemptAt?: Date;
   payoutError?: string;
   paidAt?: Date;
   cancelledByRole?: "target" | "requester";
@@ -39,15 +41,16 @@ const PaymentRequestSchema = new Schema<IPaymentRequest>(
     diversifierIndex: { type: String },
     status: {
       type: String,
-      enum: ["PENDING", "ACCEPTED", "CANCELLED", "SETTLING", "FORWARD_PENDING", "FULFILLED"],
+      enum: ["PENDING", "ACCEPTED", "CANCELLED", "SETTLING", "FORWARD_PENDING", "FULFILLED", "SETTLED", "FAILED"],
       default: "PENDING",
       index: true,
     },
     forwardOpid: { type: String, index: true },
+    forwardAttemptAt: { type: Date },
+    claimAttemptAt: { type: Date },
     payoutError: { type: String },
     paidTxid: {
       type: String,
-      unique: true,
       sparse: true,
       index: true,
       match: [
@@ -59,6 +62,7 @@ const PaymentRequestSchema = new Schema<IPaymentRequest>(
     },
     forwardTxid: {
       type: String,
+      unique: true,
       sparse: true,
       index: true,
       match: [

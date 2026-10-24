@@ -9,6 +9,8 @@ pub mod transaction;
 pub mod tree_manager;
 pub mod unified_address;
 pub mod pczt_escrow;
+pub mod orchard_builder;
+pub mod pczt;
 
 // Export init_thread_pool from wasm_bindgen_rayon for browser multithreading
 pub use wasm_bindgen_rayon::init_thread_pool;
@@ -70,6 +72,41 @@ pub fn build_and_sign_transaction(params_val: JsValue) -> Result<JsValue, JsValu
 
     serde_wasm_bindgen::to_value(&signed).map_err(|e| JsValue::from_str(&e.to_string()))
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct ShieldingTxParams {
+    pub private_key_hex: String,
+    pub utxos: Vec<transaction::UtxoInput>,
+    pub to_orchard_address: String,
+    pub amount_zatoshis: u64,
+    pub memo: Option<String>,
+    pub current_block_height: u32,
+    pub consensus_branch_id: Option<u32>,
+}
+
+#[wasm_bindgen]
+pub fn build_v5_shielding_transaction(params_val: JsValue) -> Result<JsValue, JsValue> {
+    let params: ShieldingTxParams = serde_wasm_bindgen::from_value(params_val)
+        .map_err(|e| JsValue::from_str(&format!("Invalid shielding parameters: {}", e)))?;
+
+    let branch_id = params
+        .consensus_branch_id
+        .unwrap_or(transaction::MAINNET_NU5_BRANCH_ID);
+
+    let signed = transaction::build_v5_shielding_transaction(
+        &params.private_key_hex,
+        &params.utxos,
+        &params.to_orchard_address,
+        params.amount_zatoshis,
+        params.memo.as_deref(),
+        params.current_block_height,
+        branch_id,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+
+    serde_wasm_bindgen::to_value(&signed).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 
 #[wasm_bindgen]
 pub fn derive_orchard_account(mnemonic: &str, account_index: u32, network: &str) -> Result<JsValue, JsValue> {

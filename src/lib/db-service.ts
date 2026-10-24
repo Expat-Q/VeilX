@@ -34,15 +34,21 @@ const memoryStore = global.__memoryStore;
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 /**
- * Checks across all collections if a txid has already been used for settlement
+ * Checks across all collections if a txid has already been used for settlement or payout forwarding
  */
 async function isTxidAlreadyUsed(txid: string, excludeId?: string): Promise<boolean> {
   const cleanTxid = txid.trim();
 
   // Check in-memory store for unit test & local mock environments
-  const inMemReq = memoryStore.requests.find((r) => r.paidTxid === cleanTxid && r._id !== excludeId && r.id !== excludeId);
-  const inMemLink = memoryStore.paylinks.find((l) => l.paidTxid === cleanTxid && l.slug !== excludeId && l._id !== excludeId);
-  const inMemTip = memoryStore.tips.find((t) => (t.claimTxid === cleanTxid || t.fundingTxid === cleanTxid) && t._id !== excludeId && t.id !== excludeId);
+  const inMemReq = memoryStore.requests.find(
+    (r) => (r.paidTxid === cleanTxid || r.forwardTxid === cleanTxid) && r._id !== excludeId && r.id !== excludeId
+  );
+  const inMemLink = memoryStore.paylinks.find(
+    (l) => (l.paidTxid === cleanTxid || l.forwardTxid === cleanTxid) && l.slug !== excludeId && l._id !== excludeId
+  );
+  const inMemTip = memoryStore.tips.find(
+    (t) => (t.claimTxid === cleanTxid || t.fundingTxid === cleanTxid) && t._id !== excludeId && t.id !== excludeId
+  );
   if (inMemReq || inMemLink || inMemTip) {
     return true;
   }
@@ -51,9 +57,18 @@ async function isTxidAlreadyUsed(txid: string, excludeId?: string): Promise<bool
     await connectToDatabase();
     const isObjId = !!(excludeId && mongoose.Types.ObjectId.isValid(excludeId));
     const [existingReq, existingLink, existingTip] = await Promise.all([
-      PaymentRequest.findOne({ paidTxid: cleanTxid, ...(isObjId ? { _id: { $ne: excludeId } } : {}) }).lean(),
-      PaymentLink.findOne({ paidTxid: cleanTxid, ...(excludeId ? { slug: { $ne: excludeId } } : {}) }).lean(),
-      Tip.findOne({ $or: [{ claimTxid: cleanTxid }, { fundingTxid: cleanTxid }], ...(isObjId ? { _id: { $ne: excludeId } } : {}) }).lean(),
+      PaymentRequest.findOne({
+        $or: [{ paidTxid: cleanTxid }, { forwardTxid: cleanTxid }],
+        ...(isObjId ? { _id: { $ne: excludeId } } : {}),
+      }).lean(),
+      PaymentLink.findOne({
+        $or: [{ paidTxid: cleanTxid }, { forwardTxid: cleanTxid }],
+        ...(excludeId ? { slug: { $ne: excludeId } } : {}),
+      }).lean(),
+      Tip.findOne({
+        $or: [{ claimTxid: cleanTxid }, { fundingTxid: cleanTxid }],
+        ...(isObjId ? { _id: { $ne: excludeId } } : {}),
+      }).lean(),
     ]);
 
     if (existingReq || existingLink || existingTip) {
@@ -453,7 +468,15 @@ export const dbService = {
       // Atomic Lock: transition status from FUNDED -> CLAIMING with claimLockId
       const lockedTip = await Tip.findOneAndUpdate(
         { _id: tipId, status: "FUNDED" },
-        { $set: { status: "CLAIMING", claimLockId: singleLockId, recipientXUserId: claimantXUserId, payoutSubmittedAt: new Date() } },
+        {
+          $set: {
+            status: "CLAIMING",
+            claimLockId: singleLockId,
+            claimAttemptAt: new Date(),
+            recipientXUserId: claimantXUserId,
+            payoutSubmittedAt: new Date(),
+          },
+        },
         { new: true }
       );
 
@@ -502,6 +525,7 @@ export const dbService = {
 
       inMemTip.status = "CLAIMING";
       inMemTip.claimLockId = singleLockId;
+      inMemTip.claimAttemptAt = new Date();
       inMemTip.recipientXUserId = claimantXUserId;
       inMemTip.payoutSubmittedAt = new Date();
       tipDoc = inMemTip;
@@ -682,7 +706,15 @@ export const dbService = {
     if (isMongo) {
       const lockRes = await Tip.updateMany(
         { _id: { $in: tipIds }, status: "FUNDED" },
-        { $set: { status: "CLAIMING", claimLockId: batchLockId, recipientXUserId: claimantXUserId, payoutSubmittedAt: new Date() } }
+        {
+          $set: {
+            status: "CLAIMING",
+            claimLockId: batchLockId,
+            claimAttemptAt: new Date(),
+            recipientXUserId: claimantXUserId,
+            payoutSubmittedAt: new Date(),
+          },
+        }
       );
       if (lockRes.modifiedCount === 0) {
         throw new Error("NO_CLAIMABLE_TIPS: Tips were claimed or locked concurrently.");
@@ -696,6 +728,7 @@ export const dbService = {
         if (tipIds.includes(t._id || t.id) && t.status === "FUNDED") {
           t.status = "CLAIMING";
           t.claimLockId = batchLockId;
+          t.claimAttemptAt = new Date();
           t.recipientXUserId = claimantXUserId;
           t.payoutSubmittedAt = new Date();
           lockedTipIds.push(t._id || t.id);
@@ -982,6 +1015,570 @@ export const dbService = {
       }
     }
     return results;
+  },
+
+  /**
+   * DB-02: Atomic CAS transition for Tip claiming:
+   * { _id: id, status: "FUNDED" } -> { $set: { status: "CLAIMING", claimAttemptAt: new Date() } }
+   * If not matched, rejects with conflict/error.
+   */
+  async transitionTipToClaiming(tipId: string, metadata?: { claimantXUserId?: string; claimLockId?: string }) {
+    const now = new Date();
+    const lockId = metadata?.claimLockId || "lock_" + crypto.randomUUID();
+
+    let isMongo = false;
+    try {
+      await connectToDatabase();
+      isMongo = true;
+    } catch (e) {
+      if (IS_PRODUCTION) {
+        throw new Error("DATABASE_UNAVAILABLE: Cannot acquire claim lock while database is offline.");
+      }
+    }
+
+    if (isMongo) {
+      const isObjId = mongoose.Types.ObjectId.isValid(tipId);
+      const lockedTip = await Tip.findOneAndUpdate(
+        {
+          ...(isObjId ? { _id: new mongoose.Types.ObjectId(tipId) } : { _id: tipId }),
+          status: "FUNDED",
+        },
+        {
+          $set: {
+            status: "CLAIMING",
+            claimAttemptAt: now,
+            payoutSubmittedAt: now,
+            claimLockId: lockId,
+            ...(metadata?.claimantXUserId ? { recipientXUserId: metadata.claimantXUserId } : {}),
+            updatedAt: now,
+          },
+        },
+        { new: true }
+      ).lean();
+
+      if (!lockedTip) {
+        const existing = await Tip.findById(tipId).lean();
+        if (!existing) {
+          throw new Error("TIP_NOT_FOUND: The requested tip does not exist.");
+        }
+        if (existing.status === "CLAIMING") {
+          throw new Error("TIP_CLAIM_IN_PROGRESS: A claim for this tip is currently being processed.");
+        }
+        if (existing.status === "CLAIMED" || existing.status === "SETTLED") {
+          throw new Error("TIP_ALREADY_CLAIMED: This tip has already been claimed.");
+        }
+        throw new Error(`CONCURRENT_CLAIM_PREVENTED: Tip cannot be claimed because its current status is '${existing.status}'.`);
+      }
+
+      return lockedTip;
+    }
+
+    // In-memory store fallback
+    const inMemTip = memoryStore.tips.find((t) => t._id === tipId || t.id === tipId);
+    if (!inMemTip) {
+      throw new Error("TIP_NOT_FOUND: The requested tip does not exist.");
+    }
+    if (inMemTip.status === "CLAIMING") {
+      throw new Error("TIP_CLAIM_IN_PROGRESS: A claim for this tip is currently being processed.");
+    }
+    if (inMemTip.status === "CLAIMED" || inMemTip.status === "SETTLED") {
+      throw new Error("TIP_ALREADY_CLAIMED: This tip has already been claimed.");
+    }
+    if (inMemTip.status !== "FUNDED") {
+      throw new Error(`CONCURRENT_CLAIM_PREVENTED: Tip cannot be claimed because its current status is '${inMemTip.status}'.`);
+    }
+
+    inMemTip.status = "CLAIMING";
+    inMemTip.claimAttemptAt = now;
+    inMemTip.payoutSubmittedAt = now;
+    inMemTip.claimLockId = lockId;
+    if (metadata?.claimantXUserId) inMemTip.recipientXUserId = metadata.claimantXUserId;
+    inMemTip.updatedAt = now;
+    return inMemTip;
+  },
+
+  /**
+   * DB-02: Atomic CAS transition for PayLink forward:
+   * Atomic CAS from PAID -> FORWARD_PENDING -> SETTLED
+   * (also supports confirmed SETTLING status if paidTxid is recorded)
+   */
+  async transitionPayLinkToForwardPending(slugOrId: string) {
+    const now = new Date();
+    let isMongo = false;
+    try {
+      await connectToDatabase();
+      isMongo = true;
+    } catch (e) {
+      if (IS_PRODUCTION) {
+        throw new Error("DATABASE_UNAVAILABLE: Cannot transition PayLink while database is offline.");
+      }
+    }
+
+    if (isMongo) {
+      const isObjId = mongoose.Types.ObjectId.isValid(slugOrId);
+      const lockedLink = await PaymentLink.findOneAndUpdate(
+        {
+          $or: [
+            { slug: slugOrId },
+            ...(isObjId ? [{ _id: new mongoose.Types.ObjectId(slugOrId) }] : []),
+          ],
+          status: { $in: ["PAID", "SETTLING"] },
+          forwardTxid: { $exists: false },
+        },
+        {
+          $set: {
+            status: "FORWARD_PENDING",
+            forwardAttemptAt: now,
+            updatedAt: now,
+          },
+        },
+        { new: true }
+      ).lean();
+
+      if (!lockedLink) {
+        const existing = await PaymentLink.findOne({
+          $or: [{ slug: slugOrId }, ...(isObjId ? [{ _id: slugOrId }] : [])],
+        }).lean();
+        if (!existing) {
+          throw new Error("PAYLINK_NOT_FOUND: The requested PayLink does not exist.");
+        }
+        if (existing.status === "FORWARD_PENDING") {
+          throw new Error("FORWARD_IN_PROGRESS: Payout forward for this PayLink is already in progress.");
+        }
+        if (existing.status === "SETTLED" || existing.forwardTxid) {
+          throw new Error("PAYLINK_ALREADY_SETTLED: PayLink payout has already settled.");
+        }
+        throw new Error(`CONCURRENT_FORWARD_CONFLICT: PayLink status is '${existing.status}' and cannot transition to FORWARD_PENDING.`);
+      }
+
+      return lockedLink;
+    }
+
+    // In-memory store fallback
+    const inMemLink = memoryStore.paylinks.find((l) => l.slug === slugOrId || l._id === slugOrId || l.id === slugOrId);
+    if (!inMemLink) {
+      throw new Error("PAYLINK_NOT_FOUND: The requested PayLink does not exist.");
+    }
+    if (inMemLink.status === "FORWARD_PENDING") {
+      throw new Error("FORWARD_IN_PROGRESS: Payout forward for this PayLink is already in progress.");
+    }
+    if (inMemLink.status === "SETTLED" || inMemLink.forwardTxid) {
+      throw new Error("PAYLINK_ALREADY_SETTLED: PayLink payout has already settled.");
+    }
+    if (inMemLink.status !== "PAID" && inMemLink.status !== "SETTLING") {
+      throw new Error(`CONCURRENT_FORWARD_CONFLICT: PayLink status is '${inMemLink.status}' and cannot transition to FORWARD_PENDING.`);
+    }
+
+    inMemLink.status = "FORWARD_PENDING";
+    inMemLink.forwardAttemptAt = now;
+    inMemLink.updatedAt = now;
+    return inMemLink;
+  },
+
+  /**
+   * DB-02: Atomic CAS transition for PaymentRequest forward:
+   * Atomic CAS from FULFILLED -> FORWARD_PENDING -> SETTLED
+   * (also supports confirmed SETTLING or PAID status)
+   */
+  async transitionRequestToForwardPending(id: string) {
+    const now = new Date();
+    let isMongo = false;
+    try {
+      await connectToDatabase();
+      isMongo = true;
+    } catch (e) {
+      if (IS_PRODUCTION) {
+        throw new Error("DATABASE_UNAVAILABLE: Cannot transition PaymentRequest while database is offline.");
+      }
+    }
+
+    if (isMongo) {
+      const isObjId = mongoose.Types.ObjectId.isValid(id);
+      const filter: any = {
+        ...(isObjId ? { _id: new mongoose.Types.ObjectId(id) } : { _id: id }),
+        status: { $in: ["FULFILLED", "SETTLING", "PAID"] },
+        forwardTxid: { $exists: false },
+      };
+
+      const lockedReq = await PaymentRequest.findOneAndUpdate(
+        filter,
+        {
+          $set: {
+            status: "FORWARD_PENDING",
+            forwardAttemptAt: now,
+            updatedAt: now,
+          },
+        },
+        { new: true }
+      ).lean();
+
+      if (!lockedReq) {
+        const existing = await PaymentRequest.findById(id).lean();
+        if (!existing) {
+          throw new Error("REQUEST_NOT_FOUND: The requested payment request does not exist.");
+        }
+        if (existing.status === "FORWARD_PENDING") {
+          throw new Error("FORWARD_IN_PROGRESS: Payout forward for this request is already in progress.");
+        }
+        if (existing.status === "SETTLED" || existing.forwardTxid) {
+          throw new Error("REQUEST_ALREADY_SETTLED: Payment request payout has already settled.");
+        }
+        throw new Error(`CONCURRENT_FORWARD_CONFLICT: Payment request status is '${existing.status}' and cannot transition to FORWARD_PENDING.`);
+      }
+
+      return lockedReq;
+    }
+
+    // In-memory store fallback
+    const inMemReq = memoryStore.requests.find((r) => r._id === id || r.id === id);
+    if (!inMemReq) {
+      throw new Error("REQUEST_NOT_FOUND: The requested payment request does not exist.");
+    }
+    if (inMemReq.status === "FORWARD_PENDING") {
+      throw new Error("FORWARD_IN_PROGRESS: Payout forward for this request is already in progress.");
+    }
+    if (inMemReq.status === "SETTLED" || inMemReq.forwardTxid) {
+      throw new Error("REQUEST_ALREADY_SETTLED: Payment request payout has already settled.");
+    }
+    if (inMemReq.status !== "FULFILLED" && inMemReq.status !== "SETTLING" && inMemReq.status !== "PAID") {
+      throw new Error(`CONCURRENT_FORWARD_CONFLICT: Payment request status is '${inMemReq.status}' and cannot transition to FORWARD_PENDING.`);
+    }
+
+    inMemReq.status = "FORWARD_PENDING";
+    inMemReq.forwardAttemptAt = now;
+    inMemReq.updatedAt = now;
+    return inMemReq;
+  },
+
+  /**
+   * DB-03: Settlement finalization helper finalizeSettlement(itemId, type, txid):
+   * Atomically sets status: "SETTLED", records timestamps, clears errors, stores genuine txid.
+   */
+  async finalizeSettlement(
+    itemId: string,
+    type: "tip" | "paylink" | "request",
+    txid: string,
+    metadata?: { destinationAddress?: string; claimantXUserId?: string }
+  ) {
+    const cleanTxid = txid?.trim();
+    if (!cleanTxid || cleanTxid === "pending_broadcast") {
+      throw new Error("INVALID_TXID: A valid 64-character hexadecimal transaction ID is required for final settlement.");
+    }
+
+    const validHashPattern = IS_PRODUCTION
+      ? /^[0-9a-fA-F]{64}$/
+      : /^([0-9a-fA-F]{64}|opid-[a-zA-Z0-9_-]+|(sim_tx_|valid_test_|test_|payout_txid_|forward_txid_|mined_claim_txid_)[a-zA-Z0-9_-]+)$/;
+    if (!validHashPattern.test(cleanTxid)) {
+      throw new Error("INVALID_TXID_FORMAT: Transaction ID does not conform to hex transaction format.");
+    }
+
+    const now = new Date();
+
+    // Prevent duplicate reuse across items
+    const alreadyUsed = await isTxidAlreadyUsed(cleanTxid, itemId);
+    if (alreadyUsed) {
+      throw new Error("DUPLICATE_TXID_REUSE: This transaction hash has already settled another payment or tip.");
+    }
+
+    let isMongo = false;
+    try {
+      await connectToDatabase();
+      isMongo = true;
+    } catch (e) {
+      if (IS_PRODUCTION) {
+        throw new Error("DATABASE_UNAVAILABLE: Cannot finalize settlement while database is offline.");
+      }
+    }
+
+    if (type === "tip") {
+      if (isMongo) {
+        const isObjId = mongoose.Types.ObjectId.isValid(itemId);
+        const updated = await Tip.findOneAndUpdate(
+          {
+            ...(isObjId ? { _id: new mongoose.Types.ObjectId(itemId) } : { _id: itemId }),
+            status: { $in: ["CLAIMING", "PENDING_VERIFICATION", "FUNDED"] },
+          },
+          {
+            $set: {
+              status: "SETTLED",
+              claimTxid: cleanTxid,
+              claimedAt: now,
+              payoutSubmittedAt: now,
+              payoutError: undefined,
+              claimLockId: undefined,
+              payoutOpid: undefined,
+              ...(metadata?.destinationAddress ? { recipientShieldedAddress: metadata.destinationAddress } : {}),
+              ...(metadata?.claimantXUserId ? { recipientXUserId: metadata.claimantXUserId } : {}),
+              updatedAt: now,
+            },
+          },
+          { new: true }
+        ).lean();
+
+        if (!updated) {
+          const existing = await Tip.findById(itemId).lean();
+          if (existing?.status === "SETTLED" || existing?.status === "CLAIMED") {
+            return existing;
+          }
+          throw new Error("TIP_FINALIZATION_FAILED: Tip is not in a valid state for settlement.");
+        }
+
+        memoryStore.usedTxids.add(cleanTxid);
+        return updated;
+      } else {
+        const inMem = memoryStore.tips.find((t) => t._id === itemId || t.id === itemId);
+        if (!inMem) throw new Error("TIP_NOT_FOUND");
+        if (inMem.status === "SETTLED" || inMem.status === "CLAIMED") return inMem;
+
+        inMem.status = "SETTLED";
+        inMem.claimTxid = cleanTxid;
+        inMem.claimedAt = now;
+        inMem.payoutSubmittedAt = now;
+        inMem.payoutError = undefined;
+        inMem.claimLockId = undefined;
+        inMem.payoutOpid = undefined;
+        if (metadata?.destinationAddress) inMem.recipientShieldedAddress = metadata.destinationAddress;
+        if (metadata?.claimantXUserId) inMem.recipientXUserId = metadata.claimantXUserId;
+        inMem.updatedAt = now;
+
+        memoryStore.usedTxids.add(cleanTxid);
+        return inMem;
+      }
+    } else if (type === "paylink") {
+      if (isMongo) {
+        const isObjId = mongoose.Types.ObjectId.isValid(itemId);
+        const updated = await PaymentLink.findOneAndUpdate(
+          {
+            $or: [
+              { slug: itemId },
+              ...(isObjId ? [{ _id: new mongoose.Types.ObjectId(itemId) }] : []),
+            ],
+            status: { $in: ["FORWARD_PENDING", "PAID", "SETTLING"] },
+          },
+          {
+            $set: {
+              status: "SETTLED",
+              forwardTxid: cleanTxid,
+              paidAt: now,
+              forwardOpid: undefined,
+              payoutError: undefined,
+              updatedAt: now,
+            },
+          },
+          { new: true }
+        ).lean();
+
+        if (!updated) {
+          const existing = await PaymentLink.findOne({
+            $or: [{ slug: itemId }, ...(isObjId ? [{ _id: itemId }] : [])],
+          }).lean();
+          if (existing?.status === "SETTLED" || (existing?.status === "PAID" && existing?.forwardTxid)) {
+            return existing;
+          }
+          throw new Error("PAYLINK_FINALIZATION_FAILED: PayLink is not in a valid state for settlement.");
+        }
+
+        memoryStore.usedTxids.add(cleanTxid);
+        return updated;
+      } else {
+        const inMem = memoryStore.paylinks.find((l) => l.slug === itemId || l._id === itemId || l.id === itemId);
+        if (!inMem) throw new Error("PAYLINK_NOT_FOUND");
+        if (inMem.status === "SETTLED" || (inMem.status === "PAID" && inMem.forwardTxid)) return inMem;
+
+        inMem.status = "SETTLED";
+        inMem.forwardTxid = cleanTxid;
+        inMem.paidAt = inMem.paidAt || now;
+        inMem.forwardOpid = undefined;
+        inMem.payoutError = undefined;
+        inMem.updatedAt = now;
+
+        memoryStore.usedTxids.add(cleanTxid);
+        return inMem;
+      }
+    } else if (type === "request") {
+      if (isMongo) {
+        const isObjId = mongoose.Types.ObjectId.isValid(itemId);
+        const updated = await PaymentRequest.findOneAndUpdate(
+          {
+            ...(isObjId ? { _id: new mongoose.Types.ObjectId(itemId) } : { _id: itemId }),
+            status: { $in: ["FORWARD_PENDING", "FULFILLED", "SETTLING", "PAID"] },
+          },
+          {
+            $set: {
+              status: "SETTLED",
+              forwardTxid: cleanTxid,
+              paidAt: now,
+              forwardOpid: undefined,
+              payoutError: undefined,
+              updatedAt: now,
+            },
+          },
+          { new: true }
+        ).lean();
+
+        if (!updated) {
+          const existing = await PaymentRequest.findById(itemId).lean();
+          if (existing?.status === "SETTLED" || (existing?.status === "FULFILLED" && existing?.forwardTxid)) {
+            return existing;
+          }
+          throw new Error("REQUEST_FINALIZATION_FAILED: Payment request is not in a valid state for settlement.");
+        }
+
+        memoryStore.usedTxids.add(cleanTxid);
+        return updated;
+      } else {
+        const inMem = memoryStore.requests.find((r) => r._id === itemId || r.id === itemId);
+        if (!inMem) throw new Error("REQUEST_NOT_FOUND");
+        if (inMem.status === "SETTLED" || (inMem.status === "FULFILLED" && inMem.forwardTxid)) return inMem;
+
+        inMem.status = "SETTLED";
+        inMem.forwardTxid = cleanTxid;
+        inMem.paidAt = inMem.paidAt || now;
+        inMem.forwardOpid = undefined;
+        inMem.payoutError = undefined;
+        inMem.updatedAt = now;
+
+        memoryStore.usedTxids.add(cleanTxid);
+        return inMem;
+      }
+    }
+
+    throw new Error(`UNKNOWN_ITEM_TYPE: Unsupported item type '${type}' for settlement finalization.`);
+  },
+
+  /**
+   * DB-04: Auto-recovery sweeper for abandoned / orphaned settlement locks.
+   * Checks for items stuck in CLAIMING or FORWARD_PENDING older than 5 minutes (300 seconds),
+   * and safely reverts them to FUNDED / PAID / FULFILLED so users or workers can retry.
+   */
+  async recoverOrphanedSettlements(timeoutMs: number = 5 * 60 * 1000) {
+    const thresholdDate = new Date(Date.now() - timeoutMs);
+    let recoveredTips = 0;
+    let recoveredPaylinks = 0;
+    let recoveredRequests = 0;
+
+    let isMongo = false;
+    try {
+      await connectToDatabase();
+      isMongo = true;
+    } catch (e) {
+      if (IS_PRODUCTION) {
+        throw new Error("DATABASE_UNAVAILABLE: Cannot run settlement auto-recovery while database is offline.");
+      }
+    }
+
+    if (isMongo) {
+      // 1. Recover Tips stuck in CLAIMING without active broadcast opid or txid
+      const tipRes = await Tip.updateMany(
+        {
+          status: "CLAIMING",
+          payoutOpid: { $exists: false },
+          claimTxid: { $exists: false },
+          $or: [
+            { claimAttemptAt: { $lt: thresholdDate } },
+            { payoutSubmittedAt: { $lt: thresholdDate } },
+            { updatedAt: { $lt: thresholdDate } },
+          ],
+        },
+        {
+          $set: {
+            status: "FUNDED",
+            claimLockId: undefined,
+            payoutError: "Claim attempt timed out (auto-recovered)",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      recoveredTips = tipRes.modifiedCount;
+
+      // 2. Recover PayLinks stuck in FORWARD_PENDING without forwardTxid or forwardOpid
+      const paylinkRes = await PaymentLink.updateMany(
+        {
+          status: "FORWARD_PENDING",
+          forwardTxid: { $exists: false },
+          forwardOpid: { $exists: false },
+          $or: [
+            { forwardAttemptAt: { $lt: thresholdDate } },
+            { updatedAt: { $lt: thresholdDate } },
+          ],
+        },
+        {
+          $set: {
+            status: "PAID",
+            payoutError: "Forward payout attempt timed out (auto-recovered)",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      recoveredPaylinks = paylinkRes.modifiedCount;
+
+      // 3. Recover PaymentRequests stuck in FORWARD_PENDING without forwardTxid or forwardOpid
+      const reqRes = await PaymentRequest.updateMany(
+        {
+          status: "FORWARD_PENDING",
+          forwardTxid: { $exists: false },
+          forwardOpid: { $exists: false },
+          $or: [
+            { forwardAttemptAt: { $lt: thresholdDate } },
+            { updatedAt: { $lt: thresholdDate } },
+          ],
+        },
+        {
+          $set: {
+            status: "FULFILLED",
+            payoutError: "Forward payout attempt timed out (auto-recovered)",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      recoveredRequests = reqRes.modifiedCount;
+    }
+
+    // Also sweep in-memory store for unit test / dev environments
+    const now = Date.now();
+    memoryStore.tips.forEach((t) => {
+      if (t.status === "CLAIMING" && !t.payoutOpid && !t.claimTxid) {
+        const lockedTime = new Date(t.claimAttemptAt || t.payoutSubmittedAt || t.updatedAt || t.createdAt || now).getTime();
+        if (now - lockedTime >= timeoutMs) {
+          t.status = "FUNDED";
+          t.claimLockId = undefined;
+          t.payoutError = "Claim attempt timed out (auto-recovered)";
+          t.updatedAt = new Date();
+          recoveredTips++;
+        }
+      }
+    });
+
+    memoryStore.paylinks.forEach((l) => {
+      if (l.status === "FORWARD_PENDING" && !l.forwardTxid && !l.forwardOpid) {
+        const lockedTime = new Date(l.forwardAttemptAt || l.updatedAt || l.createdAt || now).getTime();
+        if (now - lockedTime >= timeoutMs) {
+          l.status = "PAID";
+          l.payoutError = "Forward payout attempt timed out (auto-recovered)";
+          l.updatedAt = new Date();
+          recoveredPaylinks++;
+        }
+      }
+    });
+
+    memoryStore.requests.forEach((r) => {
+      if (r.status === "FORWARD_PENDING" && !r.forwardTxid && !r.forwardOpid) {
+        const lockedTime = new Date(r.forwardAttemptAt || r.updatedAt || r.createdAt || now).getTime();
+        if (now - lockedTime >= timeoutMs) {
+          r.status = "FULFILLED";
+          r.payoutError = "Forward payout attempt timed out (auto-recovered)";
+          r.updatedAt = new Date();
+          recoveredRequests++;
+        }
+      }
+    });
+
+    return {
+      recoveredTips,
+      recoveredPaylinks,
+      recoveredRequests,
+      totalRecovered: recoveredTips + recoveredPaylinks + recoveredRequests,
+    };
   },
 
   // --- PAYMENT REQUESTS ---

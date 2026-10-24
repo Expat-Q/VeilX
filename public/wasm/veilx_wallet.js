@@ -39,6 +39,18 @@ export function build_and_sign_transaction(params_val) {
 }
 
 /**
+ * @param {any} params_val
+ * @returns {any}
+ */
+export function build_v5_shielding_transaction(params_val) {
+    const ret = wasm.build_v5_shielding_transaction(params_val);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * @param {number} input_count
  * @param {number} output_count
  * @returns {bigint}
@@ -195,6 +207,24 @@ export function export_unified_full_viewing_key(mnemonic, account_index, network
 }
 
 /**
+ * Step 3: Server combines client-generated Orchard proof bundle with server-signed transparent input
+ * to assemble the complete Version 5 transaction.
+ * @param {any} params_val
+ * @param {any} proof_bundle_val
+ * @param {string} escrow_private_key_hex
+ * @returns {any}
+ */
+export function finalize_shielding_transaction(params_val, proof_bundle_val, escrow_private_key_hex) {
+    const ptr0 = passStringToWasm0(escrow_private_key_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.finalize_shielding_transaction(params_val, proof_bundle_val, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * @param {number} word_count
  * @returns {string}
  */
@@ -232,6 +262,29 @@ export function get_active_branch_ids() {
 export function initThreadPool(num_threads) {
     const ret = wasm.initThreadPool(num_threads);
     return ret;
+}
+
+/**
+ * Step 1: Pre-warm prover in Web Worker
+ * @returns {boolean}
+ */
+export function prewarm_shielding_prover() {
+    const ret = wasm.prewarm_shielding_prover();
+    return ret !== 0;
+}
+
+/**
+ * Step 2: Client-side Halo 2 Zero-Knowledge Prover for shielding transactions.
+ * Runs inside Dedicated Web Worker (`pczt-prover.worker.js`).
+ * @param {any} params_val
+ * @returns {any}
+ */
+export function prove_shielding_pczt(params_val) {
+    const ret = wasm.prove_shielding_pczt(params_val);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
 }
 
 /**

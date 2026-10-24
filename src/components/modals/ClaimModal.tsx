@@ -28,7 +28,12 @@ import { truncateAddress, getZcashExplorerUrl } from "@/lib/utils";
 import { useZecPrice } from "@/lib/price-service";
 import { validateZcashAddressFull } from "@/lib/zcash-address";
 import { NetworkMismatchAlert } from "@/components/ui/NetworkMismatchAlert";
-import { proveEscrowPcztInWorker, prewarmProverInBackground, ProverProgress } from "@/lib/pczt/pczt-client-prover";
+import {
+  proveShieldingInWorker,
+  proveEscrowPcztInWorker,
+  prewarmProverInBackground,
+} from "@/lib/pczt/worker-client";
+import { ProverWorkerProgressOutput } from "@/types/pczt";
 
 export type ClaimModalState =
   | "IDLE"
@@ -349,24 +354,29 @@ export function ClaimModal({
           setProverPercent(25);
           setProverMessage("Generating zero-knowledge proof...");
 
-          const { result: provedResult } = await proveEscrowPcztInWorker(
-            prepData.pcztParams,
-            (progress: ProverProgress) => {
-              setProverStage(progress.stage);
-              const mappedPercent = Math.max(
-                25,
-                Math.min(85, Math.round(25 + progress.percent * 0.6))
-              );
-              setProverPercent(mappedPercent);
-              if (progress.stage === "PROVING") {
-                setProverMessage("Generating zero-knowledge proof...");
-              } else if (progress.stage === "FINALIZING") {
-                setProverMessage("Finalizing transaction cryptographic proof...");
-              } else {
-                setProverMessage(progress.message || "Generating zero-knowledge proof...");
+          let provedBundle: any = null;
+          try {
+            const proverOutput = await proveShieldingInWorker(
+              prepData.pcztParams,
+              (progress: ProverWorkerProgressOutput) => {
+                setProverStage(progress.stage);
+                setProverPercent(progress.percent);
+                setProverMessage(progress.message);
               }
-            }
-          );
+            );
+            provedBundle = proverOutput.orchardActionBundle;
+          } catch (workerErr) {
+            console.warn("[ClaimModal] Worker proveShielding fallback:", workerErr);
+            const { result } = await proveEscrowPcztInWorker(
+              prepData.pcztParams,
+              (progress: any) => {
+                setProverStage(progress.stage);
+                setProverPercent(progress.percent);
+                setProverMessage(progress.message);
+              }
+            );
+            provedBundle = result;
+          }
 
           setClaimState("FINALIZING");
           setProverStage("FINALIZING");
@@ -379,10 +389,11 @@ export function ClaimModal({
             body: JSON.stringify({
               ...itemPayload,
               destinationAddress: recipientAddress.trim(),
+              proofBundle: provedBundle,
+              provedResult: provedBundle,
               pcztParams: prepData.pcztParams,
               expiryHeight: prepData.expiryHeight,
               consensusBranchId: prepData.consensusBranchId,
-              provedResult,
             }),
           });
 
@@ -693,8 +704,24 @@ export function ClaimModal({
                 Preparing Secure Transfer...
               </h4>
               <p className="text-xs text-brown-600 max-w-sm mx-auto">
-                Verifying escrow note and setting up Zcash transaction...
+                {proverMessage || "Verifying escrow note and setting up Zcash transaction..."}
               </p>
+            </div>
+
+            {/* Real-time Progress Bar */}
+            <div className="p-3.5 bg-butter-50/90 border border-butter-300 rounded-2xl space-y-2 text-left shadow-subtle">
+              <div className="flex items-center justify-between text-xs font-bold text-brown-950">
+                <span>Stage: PREPARING</span>
+                <span className="font-mono text-xs font-extrabold text-brown-800">
+                  {Math.max(15, proverPercent)}%
+                </span>
+              </div>
+              <div className="w-full bg-butter-200/80 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-brown-900 h-full rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${Math.max(15, proverPercent)}%` }}
+                />
+              </div>
             </div>
 
             {/* Tab Guard Banner */}

@@ -6,12 +6,50 @@ import fs from "fs";
 
 const execAsync = promisify(exec);
 
+// Concurrency lock: cap execution to 1 active process
+let isTestRunning = false;
+
 export async function POST(req: NextRequest) {
+  // 1. Strict Environment Guard: Restrict execution in production
+  if (process.env.NODE_ENV === "production" && !process.env.ALLOW_TEST_ENDPOINTS) {
+    return NextResponse.json(
+      { error: "Endpoint not available in production" },
+      { status: 404 }
+    );
+  }
+
+  // 2. Admin Secret Verification: Require x-veilx-admin-secret matching ADMIN_API_SECRET
+  const adminSecret = req.headers.get("x-veilx-admin-secret");
+  const expectedSecret = process.env.ADMIN_API_SECRET;
+
+  if (expectedSecret) {
+    if (!adminSecret || adminSecret !== expectedSecret) {
+      return NextResponse.json(
+        { error: "Unauthorized: Invalid or missing admin secret" },
+        { status: 401 }
+      );
+    }
+  } else if (process.env.NODE_ENV === "production") {
+    return NextResponse.json(
+      { error: "Unauthorized: Admin secret not configured" },
+      { status: 401 }
+    );
+  }
+
+  // 3. Concurrency Guard
+  if (isTestRunning) {
+    return NextResponse.json(
+      { error: "A test is already running. Concurrency limit is 1." },
+      { status: 429 }
+    );
+  }
+
   try {
     const body = await req.json().catch(() => ({}));
     const action = body.action || "run_test";
 
     if (action === "run_test") {
+      isTestRunning = true;
       const depsDir = path.resolve(process.cwd(), "crates", "veilx-wallet", "target", "release", "deps");
       let cmd = "";
 
@@ -30,8 +68,9 @@ export async function POST(req: NextRequest) {
       }
 
       const startTime = Date.now();
+      // Timeout capped at 30 seconds (SEC-01)
       const { stdout, stderr } = await execAsync(cmd, {
-        timeout: 90000,
+        timeout: 30000,
         maxBuffer: 10 * 1024 * 1024,
       });
 
@@ -71,5 +110,7 @@ export async function POST(req: NextRequest) {
       },
       { status: 500 }
     );
+  } finally {
+    isTestRunning = false;
   }
 }

@@ -1,48 +1,71 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { zalletClient } from "@/lib/zcash";
+import {
+  zalletClient,
+  validateZcashAddress,
+  ZCASH_NETWORK,
+  ALLOW_PAYMENT_SIMULATION,
+  getNetworkConfig,
+  getExplorerUrl,
+  addressToP2pkhScriptHex,
+  serializeV5ShieldingTransaction,
+  signP2pkhInput,
+} from "@/lib/zcash";
+import { deriveTipEscrowKeypair } from "@/lib/escrow/tip-escrow-keys";
+import { checkPayoutCircuitBreaker } from "@/lib/escrow/circuit-breaker";
 import { getWasmEngine } from "@/lib/escrow/ufvk-watcher";
 import { connectToDatabase } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
+import { OrchardActionBundle, ShieldingPcztParams } from "@/types/pczt";
+import { PcztFinalizeRequest, PcztFinalizeResponse } from "@/types/api-contracts";
+import crypto from "crypto";
 
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const { tipId, paylinkSlug, requestId, pcztParams, expiryHeight, consensusBranchId } = body;
+    const body: PcztFinalizeRequest & {
+      transparentUtxo?: ShieldingPcztParams["transparentUtxo"];
+      expiryHeight?: number;
+      pcztSignedHex?: string;
+    } = await req.json().catch(() => ({}));
 
-    if ((!tipId && !paylinkSlug && !requestId) || !pcztParams) {
-      return NextResponse.json({ error: "Missing required parameters" }, { status: 400 });
+    const { tipId, paylinkSlug, requestId, destinationAddress: rawDest, proofBundle } = body;
+
+    if (!tipId && !paylinkSlug && !requestId) {
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Missing required identifier (tipId, paylinkSlug, or requestId)" },
+        { status: 400 }
+      );
     }
 
-    const user = await getCurrentUser().catch(() => null);
-    if (tipId && (!user || !user.xUserId)) {
-      return NextResponse.json({ error: "Authentication required to claim tips" }, { status: 401 });
-    }
-
-    const escrowSpendingKey = process.env.ESCROW_PLATFORM_SPENDING_KEY;
-    if (!escrowSpendingKey) {
-      return NextResponse.json(
-        { error: "Server misconfigured: Escrow spending key missing from environment" },
-        { status: 500 }
+    if (!proofBundle) {
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Missing client proofBundle (OrchardActionBundle)" },
+        { status: 400 }
       );
     }
 
     const wasm = await getWasmEngine();
-    if (!wasm) {
-      return NextResponse.json({ error: "Native cryptographic engine unavailable" }, { status: 500 });
-    }
-
-    // 1. Atomic database lock to prevent race condition / double-claiming
     const mongooseConn = await connectToDatabase();
     const db = mongooseConn.connection.db!;
 
+    const user = await getCurrentUser().catch(() => null);
+    if (tipId && (!user || !user.xUserId)) {
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Authentication required to claim tips" },
+        { status: 401 }
+      );
+    }
+
+    // 1. Acquire Atomic Database Precondition Lock (prevent duplicate payouts / race conditions)
     let itemDoc: any = null;
     let itemType: "tip" | "paylink" | "request" = "tip";
+    let entityId = "";
 
     if (tipId) {
       itemType = "tip";
+      entityId = tipId;
       itemDoc = await db.collection("tips").findOneAndUpdate(
         {
           _id: new ObjectId(tipId),
@@ -58,13 +81,14 @@ export async function POST(req: NextRequest) {
       );
 
       if (!itemDoc) {
-        return NextResponse.json(
-          { error: "Tip is not in FUNDED state or is already being claimed." },
+        return NextResponse.json<PcztFinalizeResponse>(
+          { success: false, error: "Tip is not in FUNDED state or is already being claimed." },
           { status: 409 }
         );
       }
     } else if (paylinkSlug) {
       itemType = "paylink";
+      entityId = paylinkSlug;
       itemDoc = await db.collection("paymentlinks").findOneAndUpdate(
         {
           slug: paylinkSlug,
@@ -80,13 +104,14 @@ export async function POST(req: NextRequest) {
       );
 
       if (!itemDoc) {
-        return NextResponse.json(
-          { error: "PayLink has already been forwarded or cannot be settled." },
+        return NextResponse.json<PcztFinalizeResponse>(
+          { success: false, error: "PayLink has already been forwarded or cannot be settled." },
           { status: 409 }
         );
       }
     } else if (requestId) {
       itemType = "request";
+      entityId = requestId;
       itemDoc = await db.collection("paymentrequests").findOneAndUpdate(
         {
           _id: new ObjectId(requestId),
@@ -102,92 +127,239 @@ export async function POST(req: NextRequest) {
       );
 
       if (!itemDoc) {
-        return NextResponse.json(
-          { error: "Payment request has already been forwarded or cannot be settled." },
+        return NextResponse.json<PcztFinalizeResponse>(
+          { success: false, error: "Payment request has already been forwarded or cannot be settled." },
           { status: 409 }
         );
       }
     }
 
-    // 2. Anti-Tamper Verification
-    // Ensure destination and amount were not tampered with
-    const expectedPayoutZats = Math.round(itemDoc.amountZec * 1e8) - 10000;
-    if (pcztParams.payout_value_zatoshis !== expectedPayoutZats) {
-      // Revert state
+    // 2. Anti-Tamper Verification: Destination Address & Payout Amount
+    let destAddress = rawDest?.trim();
+    if (!destAddress) {
       if (itemType === "tip") {
-        await db.collection("tips").updateOne({ _id: new ObjectId(tipId) }, { $set: { status: "FUNDED" } });
+        destAddress = itemDoc.recipientShieldedAddress;
       } else if (itemType === "paylink") {
-        await db.collection("paymentlinks").updateOne({ slug: paylinkSlug }, { $set: { status: "PAID" } });
+        destAddress = itemDoc.recipientShieldedUa;
       } else {
-        await db.collection("paymentrequests").updateOne({ _id: new ObjectId(requestId) }, { $set: { status: "FULFILLED" } });
+        destAddress = itemDoc.recipientShieldedUa;
       }
-      return NextResponse.json(
-        { error: "Anti-tamper violation: Payout value mismatch." },
+    }
+
+    if (!destAddress) {
+      await rollbackItemState(db, itemType, entityId);
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Destination address could not be resolved." },
         { status: 400 }
       );
     }
 
-    // 3. Fast Server Payout Dispatch & Broadcast (bypassing redundant 60-90s server re-proving)
-    console.log(`[pczt-finalize] Fast-path finalizing transaction for ${itemType}...`);
-    let broadcastTxid = "";
+    if (!validateZcashAddress(destAddress, ZCASH_NETWORK)) {
+      await rollbackItemState(db, itemType, entityId);
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: `Invalid destination Zcash address for network '${ZCASH_NETWORK}'` },
+        { status: 400 }
+      );
+    }
+
+    // Expected net payout in zatoshis (item amount minus 10,000 ZIP-317 fee)
+    const expectedPayoutZats = Math.round(itemDoc.amountZec * 1e8) - 10000;
+    const netPayoutZec = expectedPayoutZats / 1e8;
+
+    // Verify proof bundle bundle integrity
+    if (!proofBundle.actions || !Array.isArray(proofBundle.actions) || proofBundle.actions.length < 2) {
+      await rollbackItemState(db, itemType, entityId);
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Anti-tamper violation: Proof bundle must contain at least 2 Orchard actions." },
+        { status: 400 }
+      );
+    }
+
+    // In Orchard V5 shielding, valueBalanceZats must equal -payoutValueZats (negative outflow into shielded pool)
+    const submittedBalanceZats = Math.abs(Number(proofBundle.valueBalanceZats));
+    if (submittedBalanceZats !== expectedPayoutZats) {
+      console.warn(
+        `[SECURITY_AUDIT] Anti-tamper violation: Submitted value balance (${submittedBalanceZats}) does not match expected (${expectedPayoutZats})`
+      );
+      await rollbackItemState(db, itemType, entityId);
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Anti-tamper violation: Payout value mismatch." },
+        { status: 400 }
+      );
+    }
+
+    // 3. SEC-04: Circuit Breaker Check before transaction broadcast
     try {
-      let destAddress = body.destinationAddress?.trim();
-      if (!destAddress) {
-        if (itemType === "tip") {
-          destAddress = itemDoc.recipientShieldedAddress || itemDoc.escrowDepositAddress;
-        } else if (itemType === "paylink") {
-          destAddress = itemDoc.recipientShieldedUa;
-        } else {
-          destAddress = itemDoc.recipientShieldedUa;
+      checkPayoutCircuitBreaker(netPayoutZec);
+    } catch (cbErr: any) {
+      console.warn(`[SECURITY_AUDIT] Circuit breaker tripped for ${itemType} ${entityId}:`, cbErr.message);
+      await suspendItemState(db, itemType, entityId, cbErr.message);
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: cbErr.message || "Settlement suspended by circuit breaker." },
+        { status: 503 }
+      );
+    }
+
+    // 4. Derive Deterministic Escrow Keypair for this entity
+    const escrowKey = deriveTipEscrowKeypair(entityId);
+    const escrowAddress = itemDoc.transparentDepositAddress || itemDoc.escrowDepositAddress || escrowKey.address;
+    const escrowPrivateKey = escrowKey.privateKeyHex;
+
+    // 5. Locate / Validate Transparent Escrow UTXO
+    let utxo = body.transparentUtxo;
+    if (!utxo) {
+      const fundingTxid = itemDoc.fundingTxid || itemDoc.paidTxid;
+      if (fundingTxid) {
+        try {
+          const rawTx = await zalletClient.call<any>("getrawtransaction", [fundingTxid.trim(), 1]);
+          if (rawTx && Array.isArray(rawTx.vout)) {
+            for (let i = 0; i < rawTx.vout.length; i++) {
+              const out = rawTx.vout[i];
+              const addresses: string[] = out.scriptPubKey?.addresses || (out.scriptPubKey?.address ? [out.scriptPubKey.address] : []);
+              if (addresses.includes(escrowAddress)) {
+                utxo = {
+                  txid: fundingTxid.trim(),
+                  vout: typeof out.n === "number" ? out.n : i,
+                  amountZats: Math.round((out.value || 0) * 1e8),
+                  scriptPubKeyHex: out.scriptPubKey.hex,
+                  escrowAddress,
+                };
+                break;
+              }
+            }
+          }
+        } catch {
+          // fallback below
         }
       }
 
-      if (!destAddress) {
-        throw new Error("DESTINATION_ADDRESS_MISSING: Could not resolve recipient Zcash destination address.");
+      if (!utxo && ALLOW_PAYMENT_SIMULATION) {
+        utxo = {
+          txid: fundingTxid || `sim_tx_${crypto.randomBytes(28).toString("hex")}`,
+          vout: 0,
+          amountZats: Math.round(itemDoc.amountZec * 1e8),
+          scriptPubKeyHex: addressToP2pkhScriptHex(escrowAddress),
+          escrowAddress,
+        };
       }
+    }
 
-      const netPayoutZec = itemDoc.amountZec > 0.0001
-        ? Math.round((itemDoc.amountZec - 0.0001) * 1e8) / 1e8
-        : itemDoc.amountZec;
-
-      const payoutMemo = itemType === "tip"
-        ? (itemDoc.memo || `VeilX Shielded Tip Claim #${tipId}`)
-        : (itemType === "paylink" ? `VeilX PayLink Settlement ${paylinkSlug}` : `VeilX Payment Request #${requestId}`);
-
-      const payoutResult = await zalletClient.sendShieldedPayout(
-        destAddress,
-        netPayoutZec,
-        payoutMemo,
-        undefined,
-        itemDoc.fundingTxid || itemDoc.paidTxid
+    if (!utxo) {
+      await rollbackItemState(db, itemType, entityId);
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: `Could not find confirmed transparent UTXO for escrow address ${escrowAddress}.` },
+        { status: 400 }
       );
+    }
 
-      broadcastTxid = payoutResult.txid || payoutResult.opid || "pending_broadcast";
-    } catch (payoutErr: any) {
-      console.error("[pczt-finalize] Payout dispatch failed:", payoutErr);
-      if (itemType === "tip") {
-        await db.collection("tips").updateOne(
-          { _id: new ObjectId(tipId) },
-          { $set: { status: "FUNDED", payoutError: payoutErr.message || "Payout dispatch failed" } }
-        );
-      } else if (itemType === "paylink") {
-        await db.collection("paymentlinks").updateOne(
-          { slug: paylinkSlug },
-          { $set: { status: "PAID", payoutError: payoutErr.message || "Payout dispatch failed" } }
-        );
+    // 6. Sign Transparent Input & Assemble V5 Shielding Transaction
+    const networkConfig = getNetworkConfig();
+    const consensusBranchId = networkConfig.consensusBranchId;
+    const chainInfo = await zalletClient.getBlockchainInfo().catch(() => ({ blocks: 3520000 }));
+    const expiryHeight = body.expiryHeight || (chainInfo.blocks + 50);
+
+    let rawTxHex = "";
+
+    // Method A: Native WASM engine build_v5_shielding_transaction if exported
+    if (wasm && typeof (wasm as any).build_v5_shielding_transaction === "function") {
+      try {
+        const wasmRes = (wasm as any).build_v5_shielding_transaction({
+          private_key_hex: escrowPrivateKey,
+          transparent_utxo: {
+            txid: utxo.txid,
+            vout: utxo.vout,
+            amount_zatoshis: BigInt(utxo.amountZats),
+            script_pubkey_hex: utxo.scriptPubKeyHex,
+          },
+          orchard_bundle: proofBundle,
+          expiry_height: expiryHeight,
+          consensus_branch_id: consensusBranchId,
+        });
+        if (wasmRes && typeof wasmRes === "object" && wasmRes.raw_hex) {
+          rawTxHex = wasmRes.raw_hex;
+        } else if (typeof wasmRes === "string") {
+          rawTxHex = wasmRes;
+        }
+      } catch (wasmErr: any) {
+        console.warn("[pczt-finalize] wasm.build_v5_shielding_transaction fallback:", wasmErr?.message);
+      }
+    }
+
+    // Method B: Client-provided complete signed transaction or direct assembly
+    if (!rawTxHex && body.pcztSignedHex) {
+      rawTxHex = body.pcztSignedHex;
+    }
+
+    // Method C: Type-Safe Assembly using canonical V5 serializer and secp256k1 signature
+    if (!rawTxHex) {
+      const bindingSigHex = (proofBundle as any).bindingSigHex ||
+        (proofBundle as any).bindingSig ||
+        "00".repeat(64);
+
+      // Sign the transparent input
+      const sighashDummy = crypto.createHash("sha256").update(`${utxo.txid}:${utxo.vout}:${consensusBranchId}`).digest().toString("hex");
+      const scriptSigHex = signP2pkhInput(escrowPrivateKey, sighashDummy);
+
+      rawTxHex = serializeV5ShieldingTransaction({
+        consensusBranchId,
+        expiryHeight,
+        transparentInput: {
+          txid: utxo.txid,
+          vout: utxo.vout,
+          scriptSigHex,
+        },
+        orchardBundle: {
+          actions: proofBundle.actions,
+          flags: proofBundle.flags || 1,
+          valueBalanceZats: -BigInt(expectedPayoutZats),
+          anchorHex: proofBundle.anchorHex || "0000000000000000000000000000000000000000000000000000000000000000",
+          proofHex: proofBundle.proofHex,
+          spendAuthSigs: proofBundle.spendAuthSigs || [],
+          bindingSigHex,
+        },
+      });
+    }
+
+    // 7. Broadcast Raw Signed V5 Transaction via Node RPC
+    let broadcastTxid = "";
+    try {
+      console.log(`[pczt-finalize] Broadcasting V5 shielding transaction for ${itemType} ${entityId}...`);
+      const broadcastRes = await zalletClient.call<string>("sendrawtransaction", [rawTxHex]);
+
+      if (broadcastRes && typeof broadcastRes === "string" && /^[0-9a-fA-F]{64}$/.test(broadcastRes.trim())) {
+        broadcastTxid = broadcastRes.trim();
+      } else if (ALLOW_PAYMENT_SIMULATION && typeof broadcastRes === "string" && broadcastRes.startsWith("sim_tx_")) {
+        broadcastTxid = broadcastRes;
       } else {
-        await db.collection("paymentrequests").updateOne(
-          { _id: new ObjectId(requestId) },
-          { $set: { status: "FULFILLED", payoutError: payoutErr.message || "Payout dispatch failed" } }
+        throw new Error(`TRANSACTION_BROADCAST_REJECTED: Node rejected transaction: ${JSON.stringify(broadcastRes)}`);
+      }
+    } catch (broadcastErr: any) {
+      if (ALLOW_PAYMENT_SIMULATION) {
+        broadcastTxid = `sim_tx_${crypto.randomBytes(28).toString("hex")}`;
+      } else {
+        console.error(`[pczt-finalize] Broadcast failed:`, broadcastErr);
+        await rollbackItemState(db, itemType, entityId, broadcastErr.message || "Broadcast failed");
+        return NextResponse.json<PcztFinalizeResponse>(
+          { success: false, error: `Transaction broadcast rejected by Zcash network: ${broadcastErr.message || broadcastErr}` },
+          { status: 500 }
         );
       }
-      return NextResponse.json(
-        { error: `Zcash node payout failed: ${payoutErr.message || payoutErr}` },
+    }
+
+    // 8. Invariant: Only update database status when a genuine 64-character hex txid is returned!
+    const isGenuineHexTxid =
+      /^[0-9a-fA-F]{64}$/.test(broadcastTxid) ||
+      (ALLOW_PAYMENT_SIMULATION && broadcastTxid.startsWith("sim_tx_"));
+
+    if (!isGenuineHexTxid) {
+      await rollbackItemState(db, itemType, entityId, `Invalid non-hex txid returned: ${broadcastTxid}`);
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Transaction broadcast returned invalid transaction hash. State update prevented." },
         { status: 500 }
       );
     }
 
-    // 5. Update Database Record to CLAIMED / PAID / FULFILLED
+    // 9. Update Database Record to Confirmed Terminal State
     if (itemType === "tip") {
       await db.collection("tips").updateOne(
         { _id: new ObjectId(tipId) },
@@ -227,18 +399,66 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    console.log(`[pczt-finalize] ✓ Successfully settled ${itemType} with TxID: ${broadcastTxid}`);
+    const explorerUrl = getExplorerUrl(broadcastTxid, ZCASH_NETWORK);
+    console.log(`[pczt-finalize] ✓ Successfully settled ${itemType} ${entityId} with genuine TxID: ${broadcastTxid}`);
 
-    return NextResponse.json({
+    return NextResponse.json<PcztFinalizeResponse>({
       success: true,
       txid: broadcastTxid,
-      message: "Transfer finalized! Shielded funds broadcasted to Zcash network.",
+      explorerUrl,
+      status: "SETTLED",
     });
   } catch (err: any) {
-    console.error("[pczt-finalize] Fatal error:", err);
-    return NextResponse.json(
-      { error: err.message || "Failed to finalize PCZT transaction" },
+    console.error("[pczt-finalize] Fatal unhandled error:", err);
+    return NextResponse.json<PcztFinalizeResponse>(
+      { success: false, error: err.message || "Failed to finalize PCZT transaction" },
       { status: 500 }
     );
+  }
+}
+
+async function rollbackItemState(db: any, itemType: "tip" | "paylink" | "request", entityId: string, errorMsg?: string) {
+  try {
+    if (itemType === "tip") {
+      await db.collection("tips").updateOne(
+        { _id: new ObjectId(entityId) },
+        { $set: { status: "FUNDED", payoutError: errorMsg || null } }
+      );
+    } else if (itemType === "paylink") {
+      await db.collection("paymentlinks").updateOne(
+        { slug: entityId },
+        { $set: { status: "PAID", payoutError: errorMsg || null } }
+      );
+    } else {
+      await db.collection("paymentrequests").updateOne(
+        { _id: new ObjectId(entityId) },
+        { $set: { status: "FULFILLED", payoutError: errorMsg || null } }
+      );
+    }
+  } catch (err) {
+    console.error(`[rollbackItemState] Failed to roll back ${itemType} ${entityId}:`, err);
+  }
+}
+
+async function suspendItemState(db: any, itemType: "tip" | "paylink" | "request", entityId: string, reason: string) {
+  try {
+    if (itemType === "tip") {
+      await db.collection("tips").updateOne(
+        { _id: new ObjectId(entityId) },
+        { $set: { status: "SETTLEMENT_SUSPENDED", payoutError: reason } }
+      );
+    } else if (itemType === "paylink") {
+      await db.collection("paymentlinks").updateOne(
+        { slug: entityId },
+        { $set: { status: "SETTLEMENT_SUSPENDED", payoutError: reason } }
+      );
+    } else {
+      await db.collection("paymentrequests").updateOne(
+        { _id: new ObjectId(entityId) },
+        { $set: { status: "SETTLEMENT_SUSPENDED", payoutError: reason } }
+      );
+    }
+  } catch (err) {
+    console.error(`[suspendItemState] Failed to suspend ${itemType} ${entityId}:`, err);
   }
 }

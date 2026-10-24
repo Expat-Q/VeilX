@@ -7,6 +7,8 @@ export function build_and_prove_orchard_spend(params_val: any): any;
 
 export function build_and_sign_transaction(params_val: any): any;
 
+export function build_v5_shielding_transaction(params_val: any): any;
+
 export function calculate_zip317_fee(input_count: number, output_count: number): bigint;
 
 /**
@@ -33,11 +35,28 @@ export function derive_orchard_account(mnemonic: string, account_index: number, 
 
 export function export_unified_full_viewing_key(mnemonic: string, account_index: number, network: string): string;
 
+/**
+ * Step 3: Server combines client-generated Orchard proof bundle with server-signed transparent input
+ * to assemble the complete Version 5 transaction.
+ */
+export function finalize_shielding_transaction(params_val: any, proof_bundle_val: any, escrow_private_key_hex: string): any;
+
 export function generate_seed_phrase(word_count: number): string;
 
 export function get_active_branch_ids(): any;
 
 export function initThreadPool(num_threads: number): Promise<any>;
+
+/**
+ * Step 1: Pre-warm prover in Web Worker
+ */
+export function prewarm_shielding_prover(): boolean;
+
+/**
+ * Step 2: Client-side Halo 2 Zero-Knowledge Prover for shielding transactions.
+ * Runs inside Dedicated Web Worker (`pczt-prover.worker.js`).
+ */
+export function prove_shielding_pczt(params_val: any): any;
 
 export function recover_outgoing_orchard_output(params_val: any): any;
 
@@ -86,6 +105,7 @@ export interface InitOutput {
     readonly build_and_prove_orchard_bundle: (a: any) => [number, number, number];
     readonly build_and_prove_orchard_spend: (a: any) => [number, number, number];
     readonly build_and_sign_transaction: (a: any) => [number, number, number];
+    readonly build_v5_shielding_transaction: (a: any) => [number, number, number];
     readonly calculate_zip317_fee: (a: number, b: number) => bigint;
     readonly client_prewarm_prover: () => number;
     readonly client_prove_escrow_pczt: (a: any) => [number, number, number];
@@ -95,9 +115,12 @@ export interface InitOutput {
     readonly derive_address_from_ufvk: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly derive_orchard_account: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly export_unified_full_viewing_key: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly finalize_shielding_transaction: (a: any, b: any, c: number, d: number) => [number, number, number];
     readonly generate_seed_phrase: (a: number) => [number, number, number, number];
     readonly get_active_branch_ids: () => any;
     readonly initThreadPool: (a: number) => any;
+    readonly prewarm_shielding_prover: () => number;
+    readonly prove_shielding_pczt: (a: any) => [number, number, number];
     readonly recover_outgoing_orchard_output: (a: any) => [number, number, number];
     readonly server_sign_and_finalize_pczt: (a: any, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly tree_append_commitments: (a: number, b: number) => [number, number, number, number];

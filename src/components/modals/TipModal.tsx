@@ -1426,6 +1426,30 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
                       </p>
                     </div>
 
+                    {/* Real-time Proving / Confirmation Progress Bar (FE-04) */}
+                    <div className="p-3.5 bg-white border border-butter-300 rounded-2xl space-y-2 text-left shadow-subtle">
+                      <div className="flex items-center justify-between text-xs font-bold text-brown-900">
+                        <span className="flex items-center gap-1.5">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-brown-700" />
+                          <span>Stage: CONFIRMING_ON_CHAIN</span>
+                        </span>
+                        <span className="font-mono text-xs font-extrabold text-brown-800">
+                          65%
+                        </span>
+                      </div>
+
+                      <div className="w-full bg-butter-200 h-2 rounded-full overflow-hidden">
+                        <div
+                          className="bg-brown-900 h-full rounded-full transition-all duration-300 ease-out"
+                          style={{ width: "65%" }}
+                        />
+                      </div>
+
+                      <p className="text-[11px] text-brown-600 font-medium">
+                        Awaiting next block confirmation before deposit into shielded vault.
+                      </p>
+                    </div>
+
                     {(() => {
                       const activeTxid = confirmedTxid || fundingTxidInput;
                       if (!activeTxid) return null;

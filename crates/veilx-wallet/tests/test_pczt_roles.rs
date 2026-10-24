@@ -9,7 +9,7 @@ fn test_creator_and_signer_sighash() {
     let creator = Creator::new(consensus_branch_id, expiry_height, coin_type, None, None).unwrap();
     let pczt: Pczt = creator.build().unwrap();
 
-    let bytes = pczt.serialize();
+    let bytes = pczt.serialize().unwrap();
     let pczt_parsed = Pczt::parse(&bytes).unwrap();
     println!("PCZT serialized len: {}", bytes.len());
 

@@ -1,4 +1,7 @@
 (process.env as any).NODE_ENV = "test";
+process.env.ESCROW_PLATFORM_TRANSPARENT_KEY =
+  process.env.ESCROW_PLATFORM_TRANSPARENT_KEY ||
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 import assert from "assert";
 import { dbService } from "../src/lib/db-service";
 import { setPayoutsHalted, isPayoutsHalted } from "../src/lib/payout-controls";
@@ -164,15 +167,21 @@ async function main() {
       recipientShieldedUa: VALID_DEST_ADDR,
     });
     const reqId = (testReq._id || testReq.id).toString();
+    const testPaidTxid = `valid_test_cb_${Date.now()}`;
+
+    // Phase 1: Inbound settlement transitions to SETTLING
+    const settled = await dbService.settleRequest({
+      id: reqId,
+      paidTxid: testPaidTxid,
+    });
+    assert.strictEqual(settled.status, "SETTLING");
 
     try {
       setPayoutsHalted(true, "Test circuit freeze");
+      // Phase 2: Deferred payout forwarding validates circuit breaker and halts
       await assert.rejects(
         async () => {
-          await dbService.settleRequest({
-            id: reqId,
-            paidTxid: `valid_test_cb_${Date.now()}`,
-          });
+          await dbService.retryForwardRequest(reqId);
         },
         (err: any) => err.message.includes("PAYOUTS_HALTED")
       );

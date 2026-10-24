@@ -25,9 +25,12 @@ function base58CheckEncode(payload: Buffer): string {
 }
 
 /**
- * Converts a 32-byte secp256k1 private key hex into a canonical Zcash mainnet transparent (t1...) address
+ * Converts a 32-byte secp256k1 private key hex into a canonical Zcash transparent address (t1... on mainnet, tm... on testnet)
  */
-export function privateKeyHexToZcashAddress(privKeyHex: string): string {
+export function privateKeyHexToZcashAddress(
+  privKeyHex: string,
+  network: "mainnet" | "testnet" = (process.env.NEXT_PUBLIC_ZCASH_NETWORK as "mainnet" | "testnet") || "mainnet"
+): string {
   const ecdh = crypto.createECDH("secp256k1");
   ecdh.setPrivateKey(Buffer.from(privKeyHex, "hex"));
   const pubKey = ecdh.getPublicKey(null, "compressed"); // 33 bytes compressed secp256k1 pubkey
@@ -35,8 +38,10 @@ export function privateKeyHexToZcashAddress(privKeyHex: string): string {
   const sha = crypto.createHash("sha256").update(pubKey).digest();
   const ripemd160 = crypto.createHash("ripemd160").update(sha).digest();
 
-  // Zcash Mainnet Transparent P2PKH Prefix: 0x1C, 0xB8 (produces "t1...")
-  const prefix = Buffer.from([0x1c, 0xb8]);
+  // Zcash Transparent P2PKH Prefix:
+  // Mainnet: 0x1C, 0xB8 (produces "t1...")
+  // Testnet: 0x1D, 0x25 (produces "tm...")
+  const prefix = network === "testnet" ? Buffer.from([0x1d, 0x25]) : Buffer.from([0x1c, 0xb8]);
   const payload = Buffer.concat([prefix, ripemd160]);
 
   return base58CheckEncode(payload);
@@ -47,15 +52,22 @@ export function privateKeyHexToZcashAddress(privKeyHex: string): string {
  * Completely eliminates the single shared transparent escrow vault.
  *
  * @param entityId Unique identifier for the tip, invoice, or payment request (e.g. tipId, slug, requestId)
+ * @param network Target network ('mainnet' or 'testnet')
  * @returns { address: string, privateKeyHex: string }
  */
-export function deriveTipEscrowKeypair(entityId: string): {
+export function deriveTipEscrowKeypair(
+  entityId: string,
+  network?: "mainnet" | "testnet"
+): {
   address: string;
   privateKeyHex: string;
 } {
-  const masterKeyHex =
-    process.env.ESCROW_PLATFORM_TRANSPARENT_KEY ||
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const masterKeyHex = process.env.ESCROW_PLATFORM_TRANSPARENT_KEY;
+  if (!masterKeyHex || masterKeyHex.length < 64) {
+    throw new Error(
+      "FATAL: ESCROW_PLATFORM_TRANSPARENT_KEY environment variable is missing or insecure."
+    );
+  }
 
   const masterKeyBuf = Buffer.from(masterKeyHex, "hex");
   const childKeyBuf = crypto
@@ -64,7 +76,7 @@ export function deriveTipEscrowKeypair(entityId: string): {
     .digest();
 
   const childKeyHex = childKeyBuf.toString("hex");
-  const address = privateKeyHexToZcashAddress(childKeyHex);
+  const address = privateKeyHexToZcashAddress(childKeyHex, network);
 
   return {
     address,
