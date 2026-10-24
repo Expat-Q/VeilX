@@ -162,6 +162,14 @@ export function ClaimModal({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isTransitioning]);
 
+  // Pre-warm backend and prover while user is viewing the claim modal
+  useEffect(() => {
+    if (isOpen) {
+      prewarmProverInBackground();
+      fetch("/api/health").catch(() => {});
+    }
+  }, [isOpen]);
+
   const { formatZecToUsd } = useZecPrice();
 
   const isLockedAddress = Boolean(tip?.recipientShieldedUa);
@@ -329,6 +337,7 @@ export function ClaimModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...itemPayload,
+            destinationAddress: recipientAddress.trim(),
             pcztParams: prepData.pcztParams,
             expiryHeight: prepData.expiryHeight,
             consensusBranchId: prepData.consensusBranchId,
@@ -336,12 +345,27 @@ export function ClaimModal({
           }),
         });
 
-        const finalizeData = await finalizeRes.json().catch(() => ({}));
+        let finalizeData = await finalizeRes.json().catch(() => ({}));
         if (!finalizeRes.ok || !finalizeData.success) {
-          throw new Error(finalizeData.error || "Failed to finalize and broadcast transaction.");
+          // Resilient fallback to native claim endpoint
+          if (tip.id && !tip.slug && !tip.id.startsWith("req_")) {
+            const fallbackRes = await fetch(`/api/tips/${tip.id}/claim`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ recipientShieldedAddress: recipientAddress.trim() }),
+            });
+            const fallbackData = await fallbackRes.json().catch(() => ({}));
+            if (fallbackRes.ok && fallbackData.success) {
+              finalizeData = fallbackData;
+            } else {
+              throw new Error(finalizeData.error || fallbackData.error || "Failed to finalize and broadcast transaction.");
+            }
+          } else {
+            throw new Error(finalizeData.error || "Failed to finalize and broadcast transaction.");
+          }
         }
 
-        setOutflowTxid(finalizeData.txid || "Broadcasted");
+        setOutflowTxid(finalizeData.txid || finalizeData.claimTxid || "Broadcasted");
         setClaimState("SUCCESS");
         if (onClaimSuccess) onClaimSuccess(tip.id);
         return;

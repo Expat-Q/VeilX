@@ -324,6 +324,7 @@ export function DashboardOverview({
     fetchLiveActivity();
     // Pre-warm the Orchard Halo 2 prover in Web Worker during dashboard idle time
     prewarmProverInBackground();
+    fetch("/api/health").catch(() => {});
     const interval = setInterval(fetchLiveActivity, 8000);
     return () => clearInterval(interval);
   }, [fetchLiveActivity]);

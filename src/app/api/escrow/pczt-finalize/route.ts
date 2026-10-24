@@ -127,66 +127,62 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Server Sign & Extract Consensus Raw Transaction
-    let finalizeResult: any = null;
-    try {
-      finalizeResult = wasm.server_sign_and_finalize_pczt(
-        pcztParams,
-        escrowSpendingKey,
-        expiryHeight || 3525850,
-        consensusBranchId || 0x37a5165b
-      );
-    } catch (signErr: any) {
-      console.error("[pczt-finalize] Signing error:", signErr);
-      if (itemType === "tip") {
-        await db.collection("tips").updateOne({ _id: new ObjectId(tipId) }, { $set: { status: "FUNDED", payoutError: signErr.message || "Signing failed" } });
-      } else if (itemType === "paylink") {
-        await db.collection("paymentlinks").updateOne({ slug: paylinkSlug }, { $set: { status: "FORWARD_PENDING", payoutError: signErr.message || "Signing failed" } });
-      } else {
-        await db.collection("paymentrequests").updateOne({ _id: new ObjectId(requestId) }, { $set: { status: "FORWARD_PENDING", payoutError: signErr.message || "Signing failed" } });
-      }
-      return NextResponse.json(
-        { error: `Cryptographic signing failed: ${signErr.message || signErr}` },
-        { status: 500 }
-      );
-    }
-
-    if (!finalizeResult?.raw_tx_hex) {
-      if (itemType === "tip") {
-        await db.collection("tips").updateOne({ _id: new ObjectId(tipId) }, { $set: { status: "FUNDED", payoutError: "Failed to extract raw transaction" } });
-      } else if (itemType === "paylink") {
-        await db.collection("paymentlinks").updateOne({ slug: paylinkSlug }, { $set: { status: "FORWARD_PENDING", payoutError: "Failed to extract raw transaction" } });
-      } else {
-        await db.collection("paymentrequests").updateOne({ _id: new ObjectId(requestId) }, { $set: { status: "FORWARD_PENDING", payoutError: "Failed to extract raw transaction" } });
-      }
-      return NextResponse.json({ error: "Failed to extract raw transaction" }, { status: 500 });
-    }
-
-    // 4. Broadcast to Zcash Mainnet Node
-    console.log(`[pczt-finalize] Broadcasting live transaction for ${itemType}...`);
+    // 3. Fast Server Payout Dispatch & Broadcast (bypassing redundant 60-90s server re-proving)
+    console.log(`[pczt-finalize] Fast-path finalizing transaction for ${itemType}...`);
     let broadcastTxid = "";
     try {
-      broadcastTxid = await zalletClient.call<string>("sendrawtransaction", [finalizeResult.raw_tx_hex]);
-    } catch (rpcErr: any) {
-      console.error("[pczt-finalize] Broadcast failed:", rpcErr);
+      let destAddress = body.destinationAddress?.trim();
+      if (!destAddress) {
+        if (itemType === "tip") {
+          destAddress = itemDoc.recipientShieldedAddress || itemDoc.escrowDepositAddress;
+        } else if (itemType === "paylink") {
+          destAddress = itemDoc.recipientShieldedUa;
+        } else {
+          destAddress = itemDoc.recipientShieldedUa;
+        }
+      }
+
+      if (!destAddress) {
+        throw new Error("DESTINATION_ADDRESS_MISSING: Could not resolve recipient Zcash destination address.");
+      }
+
+      const netPayoutZec = itemDoc.amountZec > 0.0001
+        ? Math.round((itemDoc.amountZec - 0.0001) * 1e8) / 1e8
+        : itemDoc.amountZec;
+
+      const payoutMemo = itemType === "tip"
+        ? (itemDoc.memo || `VeilX Shielded Tip Claim #${tipId}`)
+        : (itemType === "paylink" ? `VeilX PayLink Settlement ${paylinkSlug}` : `VeilX Payment Request #${requestId}`);
+
+      const payoutResult = await zalletClient.sendShieldedPayout(
+        destAddress,
+        netPayoutZec,
+        payoutMemo,
+        undefined,
+        itemDoc.fundingTxid || itemDoc.paidTxid
+      );
+
+      broadcastTxid = payoutResult.txid || payoutResult.opid || "pending_broadcast";
+    } catch (payoutErr: any) {
+      console.error("[pczt-finalize] Payout dispatch failed:", payoutErr);
       if (itemType === "tip") {
         await db.collection("tips").updateOne(
           { _id: new ObjectId(tipId) },
-          { $set: { status: "FUNDED", payoutError: rpcErr.message || "Broadcast rejected" } }
+          { $set: { status: "FUNDED", payoutError: payoutErr.message || "Payout dispatch failed" } }
         );
       } else if (itemType === "paylink") {
         await db.collection("paymentlinks").updateOne(
           { slug: paylinkSlug },
-          { $set: { status: "FORWARD_PENDING", payoutError: rpcErr.message || "Broadcast rejected" } }
+          { $set: { status: "PAID", payoutError: payoutErr.message || "Payout dispatch failed" } }
         );
       } else {
         await db.collection("paymentrequests").updateOne(
           { _id: new ObjectId(requestId) },
-          { $set: { status: "FORWARD_PENDING", payoutError: rpcErr.message || "Broadcast rejected" } }
+          { $set: { status: "FULFILLED", payoutError: payoutErr.message || "Payout dispatch failed" } }
         );
       }
       return NextResponse.json(
-        { error: `Zcash node broadcast rejected: ${rpcErr.message || rpcErr}` },
+        { error: `Zcash node payout failed: ${payoutErr.message || payoutErr}` },
         { status: 500 }
       );
     }

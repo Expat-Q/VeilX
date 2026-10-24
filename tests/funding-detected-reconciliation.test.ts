@@ -1,5 +1,5 @@
 process.env.ALLOW_PAYMENT_SIMULATION = "true";
-process.env.NODE_ENV = "test";
+(process.env as any).NODE_ENV = "test";
 import assert from "node:assert";
 
 async function run() {

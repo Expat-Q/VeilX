@@ -59,6 +59,10 @@ const nextConfig = {
 
     return [
       {
+        source: '/api/health',
+        destination: `${backendUrl}/api/health`,
+      },
+      {
         source: '/api/escrow/:path*',
         destination: `${backendUrl}/api/escrow/:path*`,
       },
