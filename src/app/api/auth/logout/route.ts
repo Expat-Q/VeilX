@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getBaseAppUrl } from "@/lib/twitter";
 
 export async function POST(req: NextRequest) {
   const res = NextResponse.json({ success: true });
@@ -15,5 +16,6 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   // Prevent cross-origin session destruction via <img src="/api/auth/logout">
-  return NextResponse.redirect(new URL("/", req.url));
+  const baseUrl = getBaseAppUrl(req);
+  return NextResponse.redirect(new URL("/", baseUrl));
 }

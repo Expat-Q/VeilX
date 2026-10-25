@@ -3,6 +3,23 @@ import crypto from "crypto";
 const TWITTER_CLIENT_ID = process.env.TWITTER_CLIENT_ID || "demo_client_id";
 const TWITTER_CLIENT_SECRET = process.env.TWITTER_CLIENT_SECRET || "";
 const RENDER_DEFAULT_CALLBACK_URL = "https://veilxapp.onrender.com/api/auth/callback/twitter";
+const RENDER_DEFAULT_APP_URL = "https://veilxapp.onrender.com";
+
+export function getBaseAppUrl(req?: { headers: { get: (name: string) => string | null } }): string {
+  if (req) {
+    const forwardedHost = req.headers.get("x-forwarded-host");
+    const forwardedProto = req.headers.get("x-forwarded-proto") || "https";
+    if (forwardedHost && !forwardedHost.includes("localhost") && !forwardedHost.includes("127.0.0.1")) {
+      return `${forwardedProto}://${forwardedHost}`;
+    }
+  }
+
+  if (process.env.NEXT_PUBLIC_APP_URL && !process.env.NEXT_PUBLIC_APP_URL.includes("localhost")) {
+    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
+  }
+
+  return RENDER_DEFAULT_APP_URL;
+}
 
 export function getEffectiveTwitterCallbackUrl(customCallback?: string): string {
   if (customCallback) return customCallback;

@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { exchangeCodeForToken, getTwitterMe } from "@/lib/twitter";
+import { exchangeCodeForToken, getTwitterMe, getBaseAppUrl } from "@/lib/twitter";
 import { connectToDatabase } from "@/lib/mongodb";
 import { User } from "@/models/User";
 import { setSessionCookie } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
+  const baseUrl = getBaseAppUrl(req);
   const searchParams = req.nextUrl.searchParams;
   const code = searchParams.get("code");
   const state = searchParams.get("state");
@@ -16,7 +17,7 @@ export async function GET(req: NextRequest) {
   const savedCallbackUrl = cookieStore.get("oauth_callback_url")?.value;
 
   if (!code || !state || !savedState || state !== savedState || !codeVerifier) {
-    return NextResponse.redirect(new URL("/?error=invalid_oauth_state", req.url));
+    return NextResponse.redirect(new URL("/?error=invalid_oauth_state", baseUrl));
   }
 
   try {
@@ -88,10 +89,11 @@ export async function GET(req: NextRequest) {
     // Cleanup OAuth cookies
     cookieStore.delete("oauth_code_verifier");
     cookieStore.delete("oauth_state");
+    cookieStore.delete("oauth_callback_url");
 
-    return NextResponse.redirect(new URL("/?connected=true", req.url));
+    return NextResponse.redirect(new URL("/?connected=true", baseUrl));
   } catch (error) {
     console.error("Twitter OAuth Callback Error:", error);
-    return NextResponse.redirect(new URL("/?error=oauth_failed", req.url));
+    return NextResponse.redirect(new URL("/?error=oauth_failed", baseUrl));
   }
 }
