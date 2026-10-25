@@ -9,19 +9,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Demo login is disabled in production." }, { status: 403 });
   }
 
+  const targetUsername = req.nextUrl.searchParams.get("user") || "ExpatQ3";
+  const isWeb3Central = targetUsername.toLowerCase().includes("web3");
+  const username = isWeb3Central ? "_Web3Central" : "ExpatQ3";
+  const displayName = isWeb3Central ? "Web3 Central" : "ExpatQ3";
+  const defaultXUserId = isWeb3Central ? "1721267472718839808" : "6ac7f8b168ebdfc813cba4b9";
+
   try {
     await connectToDatabase().catch(() => {});
     
     let user = await User.findOne({
-      $or: [{ xUsername: "_Web3Central" }, { xUserId: "1721267472718839808" }],
+      $or: [{ xUsername: username }, { xUserId: defaultXUserId }],
     }).lean();
 
     if (!user) {
       user = await User.create({
-        xUserId: "1721267472718839808",
-        xUsername: "_Web3Central",
-        xDisplayName: "Web3 Central",
-        profileImageUrl: "https://unavatar.io/x/_Web3Central",
+        xUserId: defaultXUserId,
+        xUsername: username,
+        xDisplayName: displayName,
+        profileImageUrl: `https://unavatar.io/x/${username}`,
         referralCount: 0,
         referralRewardsZec: 0,
         referralPoints: 100,
@@ -32,8 +38,8 @@ export async function GET(req: NextRequest) {
       userId: (user._id || user.id).toString(),
       xUserId: user.xUserId,
       xUsername: user.xUsername,
-      xDisplayName: user.xDisplayName || "_Web3Central",
-      profileImageUrl: user.profileImageUrl,
+      xDisplayName: user.xDisplayName || displayName,
+      profileImageUrl: user.profileImageUrl || `https://unavatar.io/x/${username}`,
     });
 
     const redirectUrl = new URL("/dashboard", req.url);
@@ -41,11 +47,11 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     // In-memory fallback
     setSessionCookie({
-      userId: "demo_web3central_id",
-      xUserId: "1721267472718839808",
-      xUsername: "_Web3Central",
-      xDisplayName: "Web3 Central",
-      profileImageUrl: "https://unavatar.io/x/_Web3Central",
+      userId: `demo_${username.toLowerCase()}_id`,
+      xUserId: defaultXUserId,
+      xUsername: username,
+      xDisplayName: displayName,
+      profileImageUrl: `https://unavatar.io/x/${username}`,
     });
 
     const redirectUrl = new URL("/dashboard", req.url);
