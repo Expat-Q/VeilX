@@ -6,11 +6,11 @@ export function EcosystemTicker() {
     { label: "SECURED BY ZCASH", icon: Shield },
     { label: "ZK-SNARKS PRIVACY", icon: Sparkles },
     { label: "ZERO-KNOWLEDGE HALO2", icon: CheckCircle },
-    { label: "IRONWOOD NU6.3", icon: Cpu },
+    { label: "NU5 / HALO 2 ORCHARD", icon: Cpu },
     { label: "X OAUTH 2.0 PKCE", icon: Lock },
     { label: "SHIELDED ORCHARD & SAPLING", icon: Binary },
     { label: "NOIR EXTENSION READY", icon: Globe },
-    { label: "ZODL & ZIP-321 COMPATIBLE", icon: Zap },
+    { label: "ZIP-321 COMPATIBLE", icon: Zap },
   ];
 
   // Duplicate list to create a seamless infinite loop

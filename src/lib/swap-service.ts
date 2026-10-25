@@ -65,7 +65,7 @@ async function requestSolverVault(params: {
 
   // Autonomous Platform EVM Liquidity Vault Fallback:
   // Guarantees seamless cross-chain deposits even if external aggregators delist privacy coins
-  const platformEvmVault = process.env.ESCROW_EVM_DEPOSIT_ADDRESS || "0x71C8366431a533590Ec479a1dEF800470f560299";
+  const platformEvmVault = process.env.ESCROW_EVM_DEPOSIT_ADDRESS || "";
   return {
     solverOrderId: `veilx_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
     depositAddress: platformEvmVault,

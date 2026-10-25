@@ -219,8 +219,7 @@ export default function DirectTipPage() {
           setWalletAddress(conn.address);
           setWalletChainId(conn.chainId);
         } else {
-          payerAddress = "0x71C8366431a533590Ec479a1dEF800470f560299";
-          setWalletAddress(payerAddress);
+          throw new Error("No EVM wallet detected. Please connect a browser wallet.");
         }
       }
 
@@ -270,7 +269,8 @@ export default function DirectTipPage() {
         const res = await fetch(`/api/tips/${createdTipId}`);
         const data = await res.json();
         if (res.ok && data.success && data.tip) {
-          if (data.tip.status === "FUNDED") {
+          if (data.tip.status === "FUNDED" || data.tip.status === "FUNDING_DETECTED") {
+            if (data.tip.fundingTxid) setConfirmedTxid(data.tip.fundingTxid);
             setSwapStep("SETTLED");
           }
         }
@@ -373,15 +373,15 @@ export default function DirectTipPage() {
 
                 <button
                   type="button"
-                  onClick={() => setPayMethod("cross_chain")}
-                  className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                    payMethod === "cross_chain"
-                      ? "bg-brown-900 text-white shadow-subtle"
-                      : "text-brown-700 hover:bg-butter-100"
-                  }`}
+                  disabled
+                  className="py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 opacity-60 cursor-not-allowed text-brown-400 bg-butter-50 border border-dashed border-butter-300"
+                  title="Cross-chain swap solver is currently undergoing upgrade"
                 >
                   <ArrowRightLeft className="w-3.5 h-3.5" />
                   <span>Cross-Chain</span>
+                  <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded-full border border-amber-300">
+                    Coming Soon
+                  </span>
                 </button>
               </div>
             </div>
@@ -453,6 +453,11 @@ export default function DirectTipPage() {
                 onChange={setAmountZec}
                 currencySymbol="ZEC"
                 label="Tip Amount (ZEC)"
+                error={
+                  amountZec && parseFloat(amountZec) > 0 && parseFloat(amountZec) < 0.0002
+                    ? "Minimum tip is 0.0002 ZEC (to cover the 0.0001 ZEC network miner fee on claim)"
+                    : undefined
+                }
               />
             )}
 
@@ -519,7 +524,7 @@ export default function DirectTipPage() {
               disabled={
                 payMethod === "cross_chain"
                   ? !tokenDepositAmount || parseFloat(tokenDepositAmount) <= 0
-                  : !amountZec || parseFloat(amountZec) <= 0
+                  : !amountZec || parseFloat(amountZec) < 0.0002
               }
             >
               {payMethod === "cross_chain"

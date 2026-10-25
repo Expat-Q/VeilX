@@ -69,6 +69,8 @@ pub struct ShieldingPcztParams {
     pub network: String,
     #[serde(rename = "consensusBranchId")]
     pub consensus_branch_id: Option<u32>,
+    #[serde(rename = "anchorHex", default)]
+    pub anchor_hex: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -314,11 +316,14 @@ pub fn prove_shielding_pczt_native(params: &ShieldingPcztParams) -> Result<Prove
         &bundle_commitment,
     )?;
 
+    let is_ironwood = branch_id == TESTNET_IRONWOOD_BRANCH_ID;
     let (bundle, _comm) = build_and_prove_shielding_bundle(
         &recip_bytes,
         params.payout_value_zats,
         memo_bytes.as_deref(),
         &sighash_shielded,
+        params.anchor_hex.as_deref(),
+        is_ironwood,
     )?;
 
     Ok(ProverWorkerSuccessOutput {
@@ -349,8 +354,8 @@ pub fn finalize_shielding_transaction_native(
     if bundle.actions.len() < 2 {
         return Err("Invalid bundle: minimum 2 actions required".to_string());
     }
-    if bundle.flags != 0x01 {
-        return Err("Invalid bundle: flags must be 0x01".to_string());
+    if bundle.flags != 0x02 && bundle.flags != 0x01 {
+        return Err("Invalid bundle: outputs must be enabled (flags must have bit 1 set: 0x02)".to_string());
     }
     if bundle.value_balance_zats != -(params.payout_value_zats as i64) {
         return Err(format!(
@@ -465,8 +470,10 @@ pub fn finalize_shielding_transaction_native(
     raw.push(0x00);
     raw.push(0x00);
 
-    // Orchard bundle
-    let raw_orchard = serialize_v5_orchard_bundle(bundle)?;
+    // Orchard bundle with canonical 0x02 flag byte (outputs enabled, spends disabled)
+    let mut normalized_bundle = bundle.clone();
+    normalized_bundle.flags = 0x02;
+    let raw_orchard = serialize_v5_orchard_bundle(&normalized_bundle)?;
     raw.extend_from_slice(&raw_orchard);
 
     let mut display_txid = raw_txid;

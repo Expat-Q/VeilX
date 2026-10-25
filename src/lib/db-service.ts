@@ -4,8 +4,8 @@ import { Tip, ITip } from "@/models/Tip";
 import { PaymentRequest, IPaymentRequest } from "@/models/PaymentRequest";
 import { PaymentLink, IPaymentLink } from "@/models/PaymentLink";
 import { generateValidZcashAddress, validateZcashAddress, zallet, ALLOW_PAYMENT_SIMULATION } from "@/lib/zcash";
-import { deriveTipEscrowKeypair } from "@/lib/escrow/tip-escrow-keys";
-import { checkPayoutCircuitBreaker } from "@/lib/payout-controls";
+import { deriveTipEscrowKeypair, deriveTransparentEscrowKey } from "@/lib/escrow/tip-escrow-keys";
+import { checkPayoutCircuitBreaker } from "@/lib/escrow/circuit-breaker";
 import crypto from "crypto";
 
 // In-memory persistent fallback store for development when MongoDB is offline
@@ -119,14 +119,11 @@ export const dbService = {
       }
       const tips = await Tip.find(filter).sort({ createdAt: -1 }).limit(50).lean();
       if (tips && tips.length > 0) {
-        const now = Date.now();
         for (let i = 0; i < tips.length; i++) {
           const t = tips[i];
           if (t.status === "FUNDING_DETECTED") {
-            const detectedAt = new Date(t.updatedAt || t.createdAt || now).getTime();
-            const elapsedMinutes = (now - detectedAt) / (60 * 1000);
-            let hasConfirmed = elapsedMinutes >= 3;
-            if (!hasConfirmed && t.fundingTxid) {
+            let hasConfirmed = false;
+            if (t.fundingTxid) {
               try {
                 const rawTx = await zallet.call<any>("getrawtransaction", [t.fundingTxid, 1]);
                 if (rawTx?.confirmations && rawTx.confirmations >= 1) {
@@ -163,17 +160,6 @@ export const dbService = {
         )
       : (includeUnfunded ? memoryStore.tips : memoryStore.tips.filter((t) => validStatuses.has(t.status)));
 
-    const now = Date.now();
-    for (const t of list) {
-      if (t.status === "FUNDING_DETECTED") {
-        const detectedAt = new Date(t.updatedAt || t.createdAt || now).getTime();
-        const elapsedMinutes = (now - detectedAt) / (60 * 1000);
-        if (elapsedMinutes >= 3) {
-          t.status = "FUNDED";
-          t.updatedAt = new Date();
-        }
-      }
-    }
     return list;
   },
 
@@ -214,14 +200,13 @@ export const dbService = {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
 
+    // Strict 1-confirmation requirement: NEVER promote 0-conf mempool transactions to FUNDED
     const isMempool = verification.confirmations === 0 || verification.detectedInMempool === true;
-    const detectedAt = new Date(tip.updatedAt || tip.createdAt || Date.now()).getTime();
-    const elapsedMinutes = (Date.now() - detectedAt) / (60 * 1000);
-    const hasElapsedGracePeriod = elapsedMinutes >= 3;
-    const targetStatus = (isMempool && !hasElapsedGracePeriod) ? "FUNDING_DETECTED" : "FUNDED";
+    const targetStatus = isMempool ? "FUNDING_DETECTED" : "FUNDED";
 
+    // Bug 3 Resolution: Record actual deposited amount so excess funds / overpayments are never trapped in escrow
     const finalizedAmountZec = (verification.actualAmountZec && verification.actualAmountZec > 0)
-      ? Math.min(tip.amountZec, verification.actualAmountZec)
+      ? verification.actualAmountZec
       : tip.amountZec;
 
     // 4. Update status to FUNDED (if confirmed) or FUNDING_DETECTED (if in mempool)
@@ -270,7 +255,6 @@ export const dbService = {
 
     throw new Error("TIP_NOT_FOUND: Could not locate tip record to confirm funding.");
   },
-
 
   async promoteTipToFunded(tipId: string, fundingTxid?: string) {
     try {
@@ -325,7 +309,7 @@ export const dbService = {
     memo?: string;
   }) {
     const tipId = new mongoose.Types.ObjectId().toString();
-    const { address: tipTransparentEscrow } = deriveTipEscrowKeypair(tipId);
+    const { address: tipTransparentEscrow } = deriveTipEscrowKeypair(tipId, "mainnet");
     const amountZats = Math.round(params.amountZec * 100000000);
 
     const tipPayload: any = {
@@ -535,7 +519,7 @@ export const dbService = {
 
     // Dispatch Payout directly from the Tip's Unique Escrow Address
     try {
-      const tipKey = deriveTipEscrowKeypair(tipId);
+      const tipKey = deriveTipEscrowKeypair(tipId, "mainnet");
       const tipEscrowAddr = tipDoc.transparentDepositAddress || tipDoc.escrowDepositAddress || tipKey.address;
 
       const payoutResult = await zallet.sendShieldedPayout(
@@ -625,9 +609,9 @@ export const dbService = {
   },
 
   /**
-   * Concurrency-safe durable batch claim for all funded tips of a creator.
-   * Dispatches a single shielded payout to recipientShieldedAddress for sum(amountZec) - 0.0001 miner fee,
-   * and updates all tips atomically to CLAIMED referencing the same claimTxid.
+   * Concurrency-safe sequential queue & sweep flow for all funded tips of a creator.
+   * Bug 1 Resolution: Eliminates stranded funds by processing each tip's unique transparent escrow UTXO
+   * individually through the claim pipeline, signing with its derived key, and disbursing into Orchard pool.
    */
   async claimAllTips(params: {
     claimantXUserId: string;
@@ -698,166 +682,44 @@ export const dbService = {
       throw new Error("NO_CLAIMABLE_TIPS: You do not have any pending funded tips to claim.");
     }
 
-    const tipIds = targetTips.map((t) => t._id || t.id);
-    const batchLockId = "lock_" + crypto.randomUUID();
+    // 2. Sequential Queue / Sweep: Each tip's unique transparent escrow UTXO is individually
+    // prepared, proven, signed, and disbursed into the recipient's Orchard pool.
+    const results: any[] = [];
+    const successfulTips: any[] = [];
+    let totalClaimedZec = 0;
 
-    // 2. Atomic Lock: Transition all target tips to CLAIMING tagged with unique batchLockId
-    let lockedTipIds: (string | any)[] = [];
-    if (isMongo) {
-      const lockRes = await Tip.updateMany(
-        { _id: { $in: tipIds }, status: "FUNDED" },
-        {
-          $set: {
-            status: "CLAIMING",
-            claimLockId: batchLockId,
-            claimAttemptAt: new Date(),
-            recipientXUserId: claimantXUserId,
-            payoutSubmittedAt: new Date(),
-          },
-        }
-      );
-      if (lockRes.modifiedCount === 0) {
-        throw new Error("NO_CLAIMABLE_TIPS: Tips were claimed or locked concurrently.");
-      }
-      // Re-fetch only the tips successfully locked with our specific batchLockId
-      const lockedDocs = await Tip.find({ _id: { $in: tipIds }, claimLockId: batchLockId, status: "CLAIMING" }).lean();
-      targetTips = lockedDocs;
-      lockedTipIds = lockedDocs.map((t) => t._id);
-    } else {
-      memoryStore.tips.forEach((t) => {
-        if (tipIds.includes(t._id || t.id) && t.status === "FUNDED") {
-          t.status = "CLAIMING";
-          t.claimLockId = batchLockId;
-          t.claimAttemptAt = new Date();
-          t.recipientXUserId = claimantXUserId;
-          t.payoutSubmittedAt = new Date();
-          lockedTipIds.push(t._id || t.id);
-        }
-      });
-      if (lockedTipIds.length === 0) {
-        throw new Error("NO_CLAIMABLE_TIPS: Tips were claimed or locked concurrently.");
-      }
-      targetTips = memoryStore.tips.filter((t) => lockedTipIds.includes(t._id || t.id));
-    }
-
-    const totalZec = targetTips.reduce((sum, t) => sum + (t.amountZec || 0), 0);
-    const MINING_FEE_ZEC = 0.0001;
-    if (totalZec <= MINING_FEE_ZEC) {
-      throw new Error(`AMOUNT_TOO_SMALL: Total tips amount (${totalZec} ZEC) must exceed the batch mining fee of ${MINING_FEE_ZEC} ZEC.`);
-    }
-
-    // Option A: Single 0.0001 ZEC mining fee deducted across the aggregate bundle
-    const netBatchTotalZec = Math.round((totalZec - MINING_FEE_ZEC) * 100000000) / 100000000;
-
-    // 3. Dispatch Single Shielded Payout from Escrow Pool
-    try {
-      const memo = `VeilX Shielded Batch Claim (${targetTips.length} tips)`;
-      const primaryFundingTxid = targetTips.find((t) => t.fundingTxid && !t.fundingTxid.startsWith("sim_tx_"))?.fundingTxid || targetTips[0]?.fundingTxid;
-      const payoutResult = await zallet.sendShieldedPayout(
-        recipientShieldedAddress,
-        netBatchTotalZec,
-        memo,
-        undefined,
-        primaryFundingTxid
-      );
-
-      if (payoutResult.isAsync && payoutResult.opid) {
-        if (isMongo) {
-          await Tip.updateMany(
-            { _id: { $in: lockedTipIds } },
-            {
-              $set: {
-                status: "PENDING_VERIFICATION",
-                payoutOpid: payoutResult.opid,
-                recipientShieldedAddress,
-              },
-            }
-          );
-        } else {
-          memoryStore.tips.forEach((t) => {
-            if (lockedTipIds.includes(t._id || t.id)) {
-              t.status = "PENDING_VERIFICATION";
-              t.payoutOpid = payoutResult.opid;
-              t.recipientShieldedAddress = recipientShieldedAddress;
-            }
-          });
-        }
-
-        return {
-          success: true,
-          status: "PENDING_VERIFICATION",
-          count: targetTips.length,
-          totalAmountZec: netBatchTotalZec,
-          payoutOpid: payoutResult.opid,
-          message: "Batch payout submitted to Zcash node and is pending verification.",
-        };
-      }
-
-      const payoutTxid = payoutResult.txid!;
-
-      // 4. Finalize all tips to CLAIMED
-      if (isMongo) {
-        await Tip.updateMany(
-          { _id: { $in: lockedTipIds } },
-          {
-            $set: {
-              status: "CLAIMED",
-              recipientShieldedAddress,
-              claimTxid: payoutTxid,
-              claimedAt: new Date(),
-            },
-          }
-        );
-        memoryStore.usedTxids.add(payoutTxid);
-        const updatedTips = await Tip.find({ _id: { $in: lockedTipIds } }).lean();
-        return {
-          success: true,
-          count: targetTips.length,
-          totalAmountZec: netBatchTotalZec,
-          claimTxid: payoutTxid,
-          tips: updatedTips,
-        };
-      } else {
-        memoryStore.tips.forEach((t) => {
-          if (lockedTipIds.includes(t._id || t.id)) {
-            t.status = "CLAIMED";
-            t.recipientShieldedAddress = recipientShieldedAddress;
-            t.claimTxid = payoutTxid;
-            t.claimedAt = new Date();
-          }
+    for (const tip of targetTips) {
+      const tipId = (tip._id || tip.id).toString();
+      try {
+        const claimRes = await this.claimTip({
+          tipId,
+          recipientShieldedAddress,
+          claimantXUserId,
+          claimantUsername: params.claimantUsername,
         });
-        memoryStore.usedTxids.add(payoutTxid);
-        const updatedTips = memoryStore.tips.filter((t) => lockedTipIds.includes(t._id || t.id));
-        return {
-          success: true,
-          count: targetTips.length,
-          totalAmountZec: netBatchTotalZec,
-          claimTxid: payoutTxid,
-          tips: updatedTips,
-        };
+        results.push({ tipId, ...claimRes });
+        if (claimRes.tip) successfulTips.push(claimRes.tip);
+        const netZec = Math.max(0, Math.round(((tip.amountZec || 0) - 0.0001) * 1e8) / 1e8);
+        totalClaimedZec += netZec;
+      } catch (err: any) {
+        results.push({ tipId, success: false, error: err.message || "Failed to claim tip" });
       }
-    } catch (payoutError: any) {
-      if (isMongo) {
-        await Tip.updateMany(
-          { _id: { $in: lockedTipIds } },
-          {
-            $set: {
-              status: "PENDING_VERIFICATION",
-              payoutError: payoutError.message || "Batch payout dispatch error",
-            },
-          }
-        );
-      } else {
-        memoryStore.tips.forEach((t) => {
-          if (lockedTipIds.includes(t._id || t.id)) {
-            t.status = "PENDING_VERIFICATION";
-            t.payoutError = payoutError.message || "Batch payout dispatch error";
-          }
-        });
-      }
-
-      throw new Error(`BATCH_PAYOUT_UNCERTAIN: ${payoutError.message || "Batch payout outcome is uncertain. Tips marked PENDING_VERIFICATION for safety."}`);
     }
+
+    const primaryClaimTxid =
+      successfulTips[0]?.claimTxid ||
+      results.find((r: any) => r.claimTxid)?.claimTxid ||
+      successfulTips[0]?.fundingTxid;
+
+    return {
+      success: successfulTips.length > 0,
+      count: successfulTips.length,
+      totalCount: targetTips.length,
+      totalAmountZec: Math.round(totalClaimedZec * 1e8) / 1e8,
+      claimTxid: primaryClaimTxid,
+      results,
+      tips: successfulTips,
+    };
   },
 
   /**
@@ -981,13 +843,10 @@ export const dbService = {
     }
 
     const results = [];
-    const now = Date.now();
     for (const tip of pendingTips) {
       const id = (tip._id || tip.id).toString();
       try {
         if (tip.status === "FUNDING_DETECTED") {
-          const detectedAt = new Date(tip.updatedAt || tip.createdAt || now).getTime();
-          const elapsedMinutes = (now - detectedAt) / (60 * 1000);
           let hasMinedBlock = false;
           if (tip.fundingTxid) {
             try {
@@ -999,11 +858,11 @@ export const dbService = {
               // Node unavailable or 0-conf
             }
           }
-          if (hasMinedBlock || elapsedMinutes >= 3) {
+          if (hasMinedBlock) {
             await this.promoteTipToFunded(id, tip.fundingTxid);
-            results.push({ tipId: id, status: "FUNDED", reason: hasMinedBlock ? "block_confirmed" : "elapsed_3min_grace" });
+            results.push({ tipId: id, status: "FUNDED", reason: "block_confirmed" });
           } else {
-            results.push({ tipId: id, status: "FUNDING_DETECTED", message: `Awaiting confirmations (${elapsedMinutes.toFixed(1)}m elapsed)` });
+            results.push({ tipId: id, status: "FUNDING_DETECTED", message: "Awaiting on-chain block confirmation" });
           }
           continue;
         }
@@ -1360,9 +1219,11 @@ export const dbService = {
               status: "SETTLED",
               forwardTxid: cleanTxid,
               paidAt: now,
-              forwardOpid: undefined,
-              payoutError: undefined,
               updatedAt: now,
+            },
+            $unset: {
+              forwardOpid: 1,
+              payoutError: 1,
             },
           },
           { new: true }
@@ -1408,9 +1269,11 @@ export const dbService = {
               status: "SETTLED",
               forwardTxid: cleanTxid,
               paidAt: now,
-              forwardOpid: undefined,
-              payoutError: undefined,
               updatedAt: now,
+            },
+            $unset: {
+              forwardOpid: 1,
+              payoutError: 1,
             },
           },
           { new: true }
@@ -1628,6 +1491,11 @@ export const dbService = {
     return memoryStore.requests.find((r) => r._id === id || r.id === id) || null;
   },
 
+  /**
+   * Unified Transparent Escrow Architecture for Payment Requests:
+   * Deterministically derives a unique transparent escrow address per request:
+   * childKey = HMAC-SHA256(ESCROW_PLATFORM_TRANSPARENT_KEY, "veilx:escrow:" + requestId)
+   */
   async createRequest(params: {
     requesterUserId?: string;
     requesterUsername: string;
@@ -1645,10 +1513,11 @@ export const dbService = {
       throw new Error("INVALID_RECIPIENT_ADDRESS: Destination address is not a valid Zcash address.");
     }
 
-    const escrow = await zallet.getNewEscrowAddress();
-    const transparentEscrow = zallet.getEscrowTransparentAddress();
+    const reqId = new mongoose.Types.ObjectId().toString();
+    const { address: transparentEscrow } = deriveTipEscrowKeypair(reqId, "mainnet");
 
     const payload = {
+      _id: reqId,
       requesterUserId: params.requesterUserId,
       requesterUsernameSnapshot: params.requesterUsername.replace("@", "").trim(),
       targetXUserId: params.targetXUserId || `mock_${params.targetUsername.replace("@", "").trim()}`,
@@ -1656,10 +1525,9 @@ export const dbService = {
       amountZec: params.amountZec,
       memo: params.memo,
       recipientShieldedUa: params.recipientShieldedUa,
-      escrowDepositAddress: escrow.unifiedAddress,
-      shieldedEscrowAddress: escrow.unifiedAddress,
+      escrowDepositAddress: transparentEscrow,
+      transparentDepositAddress: transparentEscrow,
       transparentEscrowAddress: transparentEscrow,
-      diversifierIndex: escrow.diversifierIndex,
       status: "PENDING" as const,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -1674,8 +1542,7 @@ export const dbService = {
         throw new Error("Database connection error: failed to persist payment request.");
       }
       const inMem = {
-        _id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        id: reqId,
         ...payload,
       };
       memoryStore.requests.unshift(inMem);
@@ -1716,14 +1583,15 @@ export const dbService = {
       throw new Error("DUPLICATE_TXID_REUSE: This transaction ID has already settled another invoice.");
     }
 
-    if (!request.escrowDepositAddress) {
+    const expectedDepositAddr = request.escrowDepositAddress || request.transparentDepositAddress;
+    if (!expectedDepositAddr) {
       throw new Error("INVALID_ESCROW_ADDRESS: Payment request does not have an escrow deposit address.");
     }
 
     // 3. Server-Side On-Chain Verification (allow 0-conf mempool detection)
     const verification = await zallet.verifyPaymentTransaction({
       txid: cleanTxid,
-      expectedAddress: request.escrowDepositAddress,
+      expectedAddress: expectedDepositAddr,
       expectedAmountZec: request.amountZec,
       minConfirmations: 0,
     });
@@ -1731,8 +1599,6 @@ export const dbService = {
     if (!verification.verified) {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
-
-    const isMempool = verification.confirmations === 0 || verification.detectedInMempool === true;
 
     // 4. ATOMIC LOCK: Transition status to SETTLING with paidTxid
     let isMongo = false;
@@ -1776,11 +1642,6 @@ export const dbService = {
       memoryStore.usedTxids.add(cleanTxid);
     }
 
-    // In PCZT shielded escrow architecture, once the payment transaction is verified
-    // on-chain and recorded, the record remains in SETTLING status.
-    // The payer's client (Option B auto-forwarder) synthesizes the proof via PCZT
-    // once block 1 is mined. If the payer tab is closed early, the creator can claim
-    // directly from their dashboard.
     return lockedRequest;
   },
 
@@ -1824,6 +1685,11 @@ export const dbService = {
     return memoryStore.paylinks.find((l) => l.slug === slug) || null;
   },
 
+  /**
+   * Unified Transparent Escrow Architecture for PayLinks:
+   * Deterministically derives a unique transparent escrow address per PayLink slug:
+   * childKey = HMAC-SHA256(ESCROW_PLATFORM_TRANSPARENT_KEY, "veilx:escrow:" + slug)
+   */
   async createPayLink(params: {
     creatorUserId?: string;
     creatorUsername: string;
@@ -1839,9 +1705,9 @@ export const dbService = {
       throw new Error("INVALID_RECIPIENT_ADDRESS: Destination address is not a valid Zcash address.");
     }
 
-    const escrow = await zallet.getNewEscrowAddress();
-    const transparentEscrow = zallet.getEscrowTransparentAddress();
     const slug = `inv_${crypto.randomBytes(4).toString("hex")}`;
+    const { address: transparentEscrow } = deriveTipEscrowKeypair(slug, "mainnet");
+
     const payload = {
       creatorUserId: params.creatorUserId,
       creatorUsernameSnapshot: params.creatorUsername.replace("@", "").trim(),
@@ -1849,10 +1715,9 @@ export const dbService = {
       title: params.title,
       amountZec: params.amountZec,
       recipientShieldedUa: params.recipientShieldedUa,
-      escrowDepositAddress: escrow.unifiedAddress,
-      shieldedEscrowAddress: escrow.unifiedAddress,
+      escrowDepositAddress: transparentEscrow,
+      transparentDepositAddress: transparentEscrow,
       transparentEscrowAddress: transparentEscrow,
-      diversifierIndex: escrow.diversifierIndex,
       status: "UNPAID" as const,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -1901,14 +1766,15 @@ export const dbService = {
       throw new Error("DUPLICATE_TXID_REUSE: This transaction ID has already settled another invoice.");
     }
 
-    if (!link.escrowDepositAddress) {
+    const expectedDepositAddr = link.escrowDepositAddress || link.transparentDepositAddress;
+    if (!expectedDepositAddr) {
       throw new Error("INVALID_ESCROW_ADDRESS: Payment link does not have an escrow deposit address.");
     }
 
     // 3. Server-Side On-Chain Verification (allow 0-conf mempool detection)
     const verification = await zallet.verifyPaymentTransaction({
       txid: cleanTxid,
-      expectedAddress: link.escrowDepositAddress,
+      expectedAddress: expectedDepositAddr,
       expectedAmountZec: link.amountZec,
       minConfirmations: 0,
     });
@@ -1916,8 +1782,6 @@ export const dbService = {
     if (!verification.verified) {
       throw new Error(`PAYMENT_VERIFICATION_FAILED: ${verification.reason || "Transaction could not be verified on-chain."}`);
     }
-
-    const isMempool = verification.confirmations === 0 || verification.detectedInMempool === true;
 
     // 4. ATOMIC LOCK: Transition status to SETTLING with paidTxid
     let isMongo = false;
@@ -1961,12 +1825,63 @@ export const dbService = {
       memoryStore.usedTxids.add(cleanTxid);
     }
 
-    // In PCZT shielded escrow architecture, once the payment transaction is verified
-    // on-chain and recorded, the record remains in SETTLING status.
-    // The payer's client (Option B auto-forwarder) synthesizes the proof via PCZT
-    // once block 1 is mined. If the payer tab is closed early, the creator can claim
-    // directly from their dashboard.
     return lockedLink;
+  },
+
+  async promotePayLinkToPaid(slug: string, paidTxid?: string) {
+    try {
+      await connectToDatabase();
+      const updateData: any = { status: "PAID", updatedAt: new Date() };
+      if (paidTxid) updateData.paidTxid = paidTxid.trim().toLowerCase();
+      const updated = await PaymentLink.findOneAndUpdate(
+        { slug },
+        { $set: updateData },
+        { new: true }
+      ).lean();
+      if (updated) {
+        if (paidTxid) memoryStore.usedTxids.add(paidTxid.trim().toLowerCase());
+        return updated;
+      }
+    } catch (e) {
+      if (IS_PRODUCTION) console.warn("[dbService] promotePayLinkToPaid warning:", e);
+    }
+
+    const inMem = memoryStore.paylinks.find((l) => l.slug === slug);
+    if (inMem) {
+      inMem.status = "PAID";
+      inMem.updatedAt = new Date();
+      if (paidTxid) inMem.paidTxid = paidTxid.trim().toLowerCase();
+      return inMem;
+    }
+    return null;
+  },
+
+  async promoteRequestToFulfilled(requestId: string, paidTxid?: string) {
+    try {
+      await connectToDatabase();
+      const updateData: any = { status: "FULFILLED", updatedAt: new Date() };
+      if (paidTxid) updateData.paidTxid = paidTxid.trim().toLowerCase();
+      const updated = await PaymentRequest.findByIdAndUpdate(
+        requestId,
+        { $set: updateData },
+        { new: true }
+      ).lean();
+      if (updated) {
+        if (paidTxid) memoryStore.usedTxids.add(paidTxid.trim().toLowerCase());
+        return updated;
+      }
+    } catch (e) {
+      if (IS_PRODUCTION) console.warn("[dbService] promoteRequestToFulfilled warning:", e);
+    }
+
+    const inMem = memoryStore.requests.find((r) => r._id === requestId || r.id === requestId);
+    if (inMem) {
+      inMem.status = "FULFILLED";
+      inMem.updatedAt = new Date();
+      if (paidTxid) inMem.paidTxid = paidTxid.trim().toLowerCase();
+      return inMem;
+    }
+    return null;
   },
 
   /**
@@ -2098,9 +2013,11 @@ export const dbService = {
           $set: {
             status: "PAID",
             forwardTxid,
-            forwardOpid: undefined,
-            payoutError: undefined,
             updatedAt: new Date(),
+          },
+          $unset: {
+            forwardOpid: 1,
+            payoutError: 1,
           },
         },
         { new: true }
@@ -2132,9 +2049,11 @@ export const dbService = {
           $set: {
             status: "FULFILLED",
             forwardTxid,
-            forwardOpid: undefined,
-            payoutError: undefined,
             updatedAt: new Date(),
+          },
+          $unset: {
+            forwardOpid: 1,
+            payoutError: 1,
           },
         },
         { new: true }
@@ -2155,9 +2074,10 @@ export const dbService = {
   },
 
   /**
-   * Manual or background retry for PayLink invoice payout forwarding
+   * Manual or background retry for PayLink invoice payout forwarding.
+   * Disburses payout directly from the unique deterministic escrow address derived for this slug.
    */
-  async retryForwardPayLink(slug: string, requestedByUsername?: string) {
+  async retryForwardPayLink(slug: string, requestedByUsername?: string, customRecipientAddress?: string) {
     const link = await this.getPayLinkBySlug(slug);
     if (!link) throw new Error("PAYLINK_NOT_FOUND");
 
@@ -2191,28 +2111,39 @@ export const dbService = {
     }
 
     // 2. If status is SETTLING, verify that the payer's transaction has at least 1 confirmation
+    const paylinkKey = deriveTipEscrowKeypair(slug, "mainnet");
+    const escrowAddr = link.escrowDepositAddress || link.transparentDepositAddress || paylinkKey.address;
+
+    let payableAmountZec = link.amountZec;
     if (link.status === "SETTLING" && link.paidTxid) {
       const verification = await zallet.verifyPaymentTransaction({
         txid: link.paidTxid,
-        expectedAddress: link.escrowDepositAddress,
+        expectedAddress: escrowAddr,
         expectedAmountZec: link.amountZec,
         minConfirmations: 1,
       });
       if (!verification.verified || (verification.confirmations || 0) < 1) {
         return { success: false, status: "SETTLING", message: "Transaction still in mempool awaiting block confirmation." };
       }
+      if (typeof verification.actualAmountZec === "number" && verification.actualAmountZec > 0) {
+        payableAmountZec = Math.min(link.amountZec, verification.actualAmountZec);
+      }
     }
 
-    // 3. Fresh payout attempt
+    // 3. Fresh payout attempt directly from the entity's unique transparent escrow UTXO
     const MINING_FEE_ZEC = 0.0001;
-    const netPayoutAmount = Math.max(0, Math.round((link.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
-    checkPayoutCircuitBreaker();
+    const netPayoutAmount = Math.max(0, Math.round((payableAmountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
+    checkPayoutCircuitBreaker(netPayoutAmount);
 
     try {
       const forwardResult = await zallet.sendShieldedPayout(
-        link.recipientShieldedUa,
+        customRecipientAddress?.trim() || link.recipientShieldedUa,
         netPayoutAmount,
-        `VeilX Invoice: ${link.title || link.slug}`
+        `VeilX Invoice: ${link.title || link.slug}`,
+        undefined,
+        link.paidTxid,
+        escrowAddr,
+        paylinkKey.privateKeyHex
       );
       if (forwardResult.txid && !forwardResult.opid) {
         const updated = await this.finalizePayLinkForward(slug, forwardResult.txid);
@@ -2223,7 +2154,13 @@ export const dbService = {
           { slug },
           { $set: { status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, payoutError: undefined } }
         ).catch(() => {});
-        return { success: true, status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, link };
+        const inMem = memoryStore.paylinks.find((l) => l.slug === slug);
+        if (inMem) {
+          inMem.status = "FORWARD_PENDING";
+          inMem.forwardOpid = forwardResult.opid;
+          inMem.payoutError = undefined;
+        }
+        return { success: true, status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, link: inMem || link };
       } else if (forwardResult.txid) {
         const updated = await this.finalizePayLinkForward(slug, forwardResult.txid);
         return { success: true, status: "PAID", forwardTxid: forwardResult.txid, link: updated };
@@ -2236,14 +2173,21 @@ export const dbService = {
         { slug },
         { $set: { status: "FORWARD_PENDING", payoutError: errMsg, updatedAt: new Date() } }
       ).catch(() => {});
+      const inMem = memoryStore.paylinks.find((l) => l.slug === slug);
+      if (inMem) {
+        inMem.status = "FORWARD_PENDING";
+        inMem.payoutError = errMsg;
+        inMem.updatedAt = new Date();
+      }
       throw new Error(`PAYOUT_RETRY_FAILED: ${errMsg}`);
     }
   },
 
   /**
-   * Manual or background retry for direct payment request payout forwarding
+   * Manual or background retry for direct payment request payout forwarding.
+   * Disburses payout directly from the unique deterministic escrow address derived for this request ID.
    */
-  async retryForwardRequest(id: string, requestedByUsername?: string) {
+  async retryForwardRequest(id: string, requestedByUsername?: string, customRecipientAddress?: string) {
     const request = await this.getRequestById(id);
     if (!request) throw new Error("REQUEST_NOT_FOUND");
 
@@ -2277,30 +2221,39 @@ export const dbService = {
     }
 
     // 2. If status is SETTLING, verify that the payer's transaction has at least 1 confirmation
+    const reqKey = deriveTipEscrowKeypair(id, "mainnet");
+    const escrowAddr = request.escrowDepositAddress || request.transparentDepositAddress || reqKey.address;
+
+    let payableAmountZec = request.amountZec;
     if (request.status === "SETTLING" && request.paidTxid) {
       const verification = await zallet.verifyPaymentTransaction({
         txid: request.paidTxid,
-        expectedAddress: request.escrowDepositAddress,
+        expectedAddress: escrowAddr,
         expectedAmountZec: request.amountZec,
         minConfirmations: 1,
       });
       if (!verification.verified || (verification.confirmations || 0) < 1) {
         return { success: false, status: "SETTLING", message: "Transaction still in mempool awaiting block confirmation." };
       }
+      if (typeof verification.actualAmountZec === "number" && verification.actualAmountZec > 0) {
+        payableAmountZec = Math.min(request.amountZec, verification.actualAmountZec);
+      }
     }
 
-    // 3. Fresh payout attempt
+    // 3. Fresh payout attempt directly from the request's unique transparent escrow UTXO
     const MINING_FEE_ZEC = 0.0001;
-    const netPayoutAmount = Math.max(0, Math.round((request.amountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
-    checkPayoutCircuitBreaker();
+    const netPayoutAmount = Math.max(0, Math.round((payableAmountZec - MINING_FEE_ZEC) * 100000000) / 100000000);
+    checkPayoutCircuitBreaker(netPayoutAmount);
 
     try {
       const forwardResult = await zallet.sendShieldedPayout(
-        request.recipientShieldedUa,
+        customRecipientAddress?.trim() || request.recipientShieldedUa,
         netPayoutAmount,
         request.memo || "VeilX Payment Request Fulfilled",
         undefined,
-        request.paidTxid
+        request.paidTxid,
+        escrowAddr,
+        reqKey.privateKeyHex
       );
       if (forwardResult.txid && !forwardResult.opid) {
         const updated = await this.finalizeRequestForward(id, forwardResult.txid);
@@ -2311,7 +2264,13 @@ export const dbService = {
           id,
           { $set: { status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, payoutError: undefined } }
         ).catch(() => {});
-        return { success: true, status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, request };
+        const inMem = memoryStore.requests.find((r) => r._id === id || r.id === id);
+        if (inMem) {
+          inMem.status = "FORWARD_PENDING";
+          inMem.forwardOpid = forwardResult.opid;
+          inMem.payoutError = undefined;
+        }
+        return { success: true, status: "FORWARD_PENDING", forwardOpid: forwardResult.opid, request: inMem || request };
       } else if (forwardResult.txid) {
         const updated = await this.finalizeRequestForward(id, forwardResult.txid);
         return { success: true, status: "FULFILLED", forwardTxid: forwardResult.txid, request: updated };
@@ -2324,6 +2283,12 @@ export const dbService = {
         id,
         { $set: { status: "FORWARD_PENDING", payoutError: errMsg, updatedAt: new Date() } }
       ).catch(() => {});
+      const inMem = memoryStore.requests.find((r) => r._id === id || r.id === id);
+      if (inMem) {
+        inMem.status = "FORWARD_PENDING";
+        inMem.payoutError = errMsg;
+        inMem.updatedAt = new Date();
+      }
       throw new Error(`PAYOUT_RETRY_FAILED: ${errMsg}`);
     }
   },

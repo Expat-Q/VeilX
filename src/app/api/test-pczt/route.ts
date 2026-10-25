@@ -101,12 +101,13 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error: any) {
+    console.error("[test-pczt] Execution error:", error);
+    const isProd = process.env.NODE_ENV === "production";
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Failed to execute PCZT test",
-        stdout: error.stdout,
-        stderr: error.stderr,
+        error: isProd ? "PCZT test execution failed." : (error.message || "Failed to execute PCZT test"),
+        ...(isProd ? {} : { stdout: error.stdout, stderr: error.stderr }),
       },
       { status: 500 }
     );

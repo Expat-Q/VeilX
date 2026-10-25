@@ -2,7 +2,15 @@ import crypto from "crypto";
 
 const TWITTER_CLIENT_ID = process.env.TWITTER_CLIENT_ID || "demo_client_id";
 const TWITTER_CLIENT_SECRET = process.env.TWITTER_CLIENT_SECRET || "";
-const TWITTER_CALLBACK_URL = process.env.TWITTER_CALLBACK_URL || "http://localhost:3000/api/auth/callback/twitter";
+const RENDER_DEFAULT_CALLBACK_URL = "https://veilxapp.onrender.com/api/auth/callback/twitter";
+
+export function getEffectiveTwitterCallbackUrl(customCallback?: string): string {
+  if (customCallback) return customCallback;
+  if (process.env.TWITTER_CALLBACK_URL) {
+    return process.env.TWITTER_CALLBACK_URL;
+  }
+  return RENDER_DEFAULT_CALLBACK_URL;
+}
 
 export function generatePkcePair() {
   const codeVerifier = crypto.randomBytes(32).toString("base64url");
@@ -14,11 +22,12 @@ export function generatePkcePair() {
   return { codeVerifier, codeChallenge };
 }
 
-export function getTwitterAuthUrl(state: string, codeChallenge: string) {
+export function getTwitterAuthUrl(state: string, codeChallenge: string, customCallback?: string) {
+  const callbackUrl = getEffectiveTwitterCallbackUrl(customCallback);
   const params = new URLSearchParams({
     response_type: "code",
     client_id: TWITTER_CLIENT_ID,
-    redirect_uri: TWITTER_CALLBACK_URL,
+    redirect_uri: callbackUrl,
     scope: "tweet.read users.read offline.access",
     state: state,
     code_challenge: codeChallenge,
@@ -28,12 +37,13 @@ export function getTwitterAuthUrl(state: string, codeChallenge: string) {
   return `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
 }
 
-export async function exchangeCodeForToken(code: string, codeVerifier: string) {
+export async function exchangeCodeForToken(code: string, codeVerifier: string, customCallback?: string) {
+  const callbackUrl = getEffectiveTwitterCallbackUrl(customCallback);
   const params = new URLSearchParams({
     code: code,
     grant_type: "authorization_code",
     client_id: TWITTER_CLIENT_ID,
-    redirect_uri: TWITTER_CALLBACK_URL,
+    redirect_uri: callbackUrl,
     code_verifier: codeVerifier,
   });
 

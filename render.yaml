@@ -1,8 +1,8 @@
 services:
   - type: web
-    name: veilx-app
+    name: veilx
     runtime: node
-    plan: starter
+    plan: free
     region: oregon
     buildCommand: npm install && npm run build
     startCommand: npm start
@@ -21,29 +21,23 @@ services:
         sync: false
       - key: SESSION_SECRET
         sync: false
-      - key: TWITTER_CLIENT_ID
-        sync: false
-      - key: TWITTER_CLIENT_SECRET
-        sync: false
-      - key: TWITTER_CALLBACK_URL
-        sync: false
-      - key: TWITTER_BEARER_TOKEN
-        sync: false
-      - key: ZALLET_RPC_URL
-        sync: false
-      - key: ZALLET_RPC_API_KEY
+      - key: ESCROW_PLATFORM_TRANSPARENT_KEY
         sync: false
       - key: NOWNODES_RPC_URL
         sync: false
       - key: NOWNODES_API_KEY
         sync: false
-      - key: ESCROW_PLATFORM_SPENDING_KEY
+      - key: ZALLET_RPC_URL
         sync: false
-      - key: ESCROW_PLATFORM_TRANSPARENT_KEY
+      - key: ZALLET_RPC_API_KEY
         sync: false
-      - key: ESCROW_PLATFORM_TRANSPARENT_ADDRESS
+      - key: TWITTER_CLIENT_ID
         sync: false
-      - key: ESCROW_PLATFORM_UFVK
+      - key: TWITTER_CLIENT_SECRET
         sync: false
-      - key: ESCROW_BIRTHDAY_HEIGHT
+      - key: TWITTER_CALLBACK_URL
+        value: https://veilxapp.onrender.com/api/auth/callback/twitter
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://veilxapp.onrender.com
+      - key: TWITTER_BEARER_TOKEN
         sync: false

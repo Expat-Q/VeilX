@@ -16,7 +16,7 @@ export function HowItWorksSection() {
     {
       num: "03",
       title: "Recipient Claims Instantly",
-      desc: "When the recipient joins VeilX and authenticates with X OAuth, they provide their wallet address and claim 100% of the funds.",
+      desc: "When the recipient joins VeilX and authenticates with X OAuth, they provide their shielded wallet address and claim funds directly to their private wallet.",
     },
   ];
 

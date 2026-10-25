@@ -1,4 +1,7 @@
 (process.env as any).NODE_ENV = "test";
+process.env.ESCROW_PLATFORM_TRANSPARENT_KEY =
+  process.env.ESCROW_PLATFORM_TRANSPARENT_KEY ||
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 import assert from "assert";
 import { swapService } from "../src/lib/swap-service";
 import { dbService } from "../src/lib/db-service";

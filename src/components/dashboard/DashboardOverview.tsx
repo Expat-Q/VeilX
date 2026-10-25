@@ -210,6 +210,7 @@ export function DashboardOverview({
                 depositTxid: t.fundingTxid,
                 outflowTxid: t.claimTxid,
                 recipientShieldedUa: t.recipientShieldedAddress,
+                confirmations: t.confirmations || 0,
                 date: createdDate,
                 rawDate: t.createdAt ? new Date(t.createdAt).getTime() : 0,
               });
@@ -261,6 +262,7 @@ export function DashboardOverview({
               depositTxid,
               outflowTxid,
               payoutError,
+              confirmations: r.confirmations || 0,
               date: createdDate,
               rawDate: r.createdAt ? new Date(r.createdAt).getTime() : 0,
             });
@@ -302,6 +304,7 @@ export function DashboardOverview({
               depositTxid,
               outflowTxid,
               payoutError,
+              confirmations: p.confirmations || 0,
               date: createdDate,
               rawDate: p.createdAt ? new Date(p.createdAt).getTime() : 0,
             });
@@ -330,17 +333,23 @@ export function DashboardOverview({
   }, [fetchLiveActivity]);
 
   const isItemReadyToDisburse = (a: any) => {
-    // 1. Tips received in escrow
+    // 1. Tips received in escrow (must be confirmed in FUNDED state)
     if (a.type === "received" && a.status === "FUNDED") return true;
-    // 2. PayLinks awaiting forward / disbursement
+    // 2. PayLinks awaiting forward / disbursement (must be confirmed on-chain)
     if (a.type === "paylink") {
-      if (a.paidTxid && !a.forwardTxid) return true;
-      if (a.status === "SETTLING" || a.status === "FORWARD_PENDING" || Boolean(a.payoutError)) return true;
+      if (a.forwardTxid) return false;
+      const confs = a.confirmations ?? 0;
+      if (a.status === "PAID" || a.status === "FORWARD_PENDING" || Boolean(a.payoutError) || (Boolean(a.paidTxid) && confs >= 1)) {
+        return true;
+      }
     }
-    // 3. Outgoing requests fulfilled by target awaiting disbursement to user
+    // 3. Outgoing requests fulfilled by target awaiting disbursement to user (must be confirmed on-chain)
     if (a.type === "request" && !a.isIncoming) {
-      if (a.paidTxid && !a.forwardTxid) return true;
-      if (a.status === "SETTLING" || a.status === "FORWARD_PENDING" || Boolean(a.payoutError)) return true;
+      if (a.forwardTxid) return false;
+      const confs = a.confirmations ?? 0;
+      if (a.status === "FULFILLED" || a.status === "FORWARD_PENDING" || Boolean(a.payoutError) || (Boolean(a.paidTxid) && confs >= 1)) {
+        return true;
+      }
     }
     return false;
   };
@@ -449,9 +458,13 @@ export function DashboardOverview({
         {/* Live ZEC Price Badge */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 shrink-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            {safePendingTotal > 0 ? (
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-brown-300 shrink-0" />
+            )}
             <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-brown-500 whitespace-nowrap">
-              Shielded Balance
+              {safePendingTotal > 0 ? "Claimable Escrow" : "Escrow Balance"}
             </span>
           </div>
 
@@ -472,8 +485,8 @@ export function DashboardOverview({
         <div className="text-center space-y-2 py-2">
           {safePendingTotal > 0 ? (
             <>
-              <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-brown-400">
-                Pending Shielded Tips to Claim
+              <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-emerald-700">
+                Claimable Escrow Balance
               </p>
               <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
                 {formatZecValue(safePendingTotal)} <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
@@ -487,22 +500,10 @@ export function DashboardOverview({
                 )}
               </p>
             </>
-          ) : safeClaimedTotal > 0 ? (
-            <>
-              <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-emerald-700">
-                Total Shielded Disbursed
-              </p>
-              <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
-                {formatZecValue(safeClaimedTotal)} <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
-              </p>
-              <p className="text-xs font-medium text-brown-500">
-                ≈ {formatZecToUsd(safeClaimedTotal)} USD
-              </p>
-            </>
           ) : (
             <>
               <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-brown-400">
-                Shielded Escrow Balance
+                Claimable Escrow Balance
               </p>
               <p className="text-3xl sm:text-5xl font-mono font-extrabold text-brown-950 tracking-tight">
                 0.00 <span className="text-xl sm:text-2xl font-bold text-brown-700">ZEC</span>
@@ -513,8 +514,17 @@ export function DashboardOverview({
             </>
           )}
 
-          {/* Minimalist Inflow & Outflow Ledger Bar */}
-          <div className="pt-2 flex items-center justify-center">
+          {/* Secondary Metrics: Historical Disbursed & Inflow/Outflow */}
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2">
+            {safeClaimedTotal > 0 && (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50/90 border border-emerald-200 rounded-full text-xs shadow-subtle">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span className="text-[11px] font-semibold text-emerald-800">Total All-Time Disbursed:</span>
+                <span className="font-mono font-bold text-emerald-950">
+                  {formatZecValue(safeClaimedTotal)} ZEC
+                </span>
+              </div>
+            )}
             <div className="inline-flex items-center gap-3 px-3.5 py-1.5 bg-butter-50/80 border border-butter-200/90 rounded-full text-xs shadow-subtle divide-x divide-butter-300">
               <div className="flex items-center gap-1.5 text-emerald-800">
                 <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
@@ -595,7 +605,7 @@ export function DashboardOverview({
               <Shield className="w-4 h-4 text-emerald-200" />
               <span>
                 {pendingTips.length > 1
-                  ? `⚡ Claim All ${pendingTips.length} Tips (${formatZecValue(safePendingTotal)} ZEC)`
+                  ? `Claim Pending Tips (1 of ${pendingTips.length})`
                   : `Claim ${formatZecValue(safePendingTotal)} ZEC to Wallet`}
               </span>
             </button>
@@ -893,7 +903,7 @@ export function DashboardOverview({
                         )}
 
                         {/* Payout Pending alert chip */}
-                        {item.payoutError && (
+                        {item.payoutError && !item.forwardTxid && !item.claimTxid && item.status !== "PAID" && item.status !== "SETTLED" && item.status !== "CLAIMED" && (
                           <span
                             className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded-md"
                             title={item.payoutError}
@@ -920,10 +930,9 @@ export function DashboardOverview({
 
                     {/* Action & Status Classification */}
                     {isPayLink ? (
-                      (item.paidTxid && !item.forwardTxid) ||
-                      item.status === "SETTLING" ||
-                      item.status === "FORWARD_PENDING" ||
-                      item.payoutError ? (
+                      item.paidTxid && item.forwardTxid ? (
+                        <StatusBadge status="SETTLED" customLabel="Disbursed" />
+                      ) : isItemReadyToDisburse(item) ? (
                         <div className="flex items-center gap-1.5">
                           <Button
                             onClick={() =>
@@ -950,8 +959,8 @@ export function DashboardOverview({
                           </Button>
                           <StatusBadge status="READY_TO_DISBURSE" />
                         </div>
-                      ) : item.paidTxid && item.forwardTxid ? (
-                        <StatusBadge status="SETTLED" customLabel="Disbursed" />
+                      ) : item.paidTxid || item.status === "SETTLING" ? (
+                        <StatusBadge status="FUNDING_DETECTED" customLabel="Confirming (0-conf)..." />
                       ) : (
                         <StatusBadge status={item.status} />
                       )
@@ -971,10 +980,9 @@ export function DashboardOverview({
                         </div>
                       ) : item.status === "CANCELLED" ? (
                         <StatusBadge status="CANCELLED" />
-                      ) : (item.paidTxid && !item.forwardTxid) ||
-                        item.status === "SETTLING" ||
-                        item.status === "FORWARD_PENDING" ||
-                        item.payoutError ? (
+                      ) : item.paidTxid && item.forwardTxid ? (
+                        <StatusBadge status="SETTLED" customLabel="Disbursed" />
+                      ) : isItemReadyToDisburse(item) ? (
                         <div className="flex items-center gap-1.5">
                           <Button
                             onClick={() =>
@@ -999,8 +1007,8 @@ export function DashboardOverview({
                           </Button>
                           <StatusBadge status="READY_TO_DISBURSE" />
                         </div>
-                      ) : item.paidTxid && item.forwardTxid ? (
-                        <StatusBadge status="SETTLED" customLabel="Disbursed" />
+                      ) : item.paidTxid || item.status === "SETTLING" ? (
+                        <StatusBadge status="FUNDING_DETECTED" customLabel="Confirming (0-conf)..." />
                       ) : (
                         <StatusBadge status={item.status} />
                       )

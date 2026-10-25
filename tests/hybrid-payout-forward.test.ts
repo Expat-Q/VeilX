@@ -1,4 +1,7 @@
 (process.env as any).NODE_ENV = "test";
+process.env.ESCROW_PLATFORM_TRANSPARENT_KEY =
+  process.env.ESCROW_PLATFORM_TRANSPARENT_KEY ||
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 import assert from "node:assert";
 import { dbService } from "../src/lib/db-service";
 import { zallet } from "../src/lib/zcash";
@@ -61,8 +64,13 @@ async function main() {
         paidTxid: `valid_test_paylink_hybrid_${Date.now()}`,
       });
 
-      assert.strictEqual(settled.status, "FORWARD_PENDING");
-      assert(settled.payoutError?.includes("RPC_SIMULATED_OUTAGE"), "Payout error must be recorded");
+      assert.strictEqual(settled.status, "SETTLING");
+      try {
+        await dbService.retryForwardPayLink(paylink.slug);
+      } catch (e: any) {}
+      const updated = (await dbService.getPayLinkBySlug(paylink.slug))!;
+      assert.strictEqual(updated.status, "FORWARD_PENDING");
+      assert(updated.payoutError?.includes("RPC_SIMULATED_OUTAGE"), "Payout error must be recorded");
       assert(settled.paidTxid, "Payer deposit txid must be preserved");
     } finally {
       zallet.sendShieldedPayout = origPayout;
@@ -138,8 +146,13 @@ async function main() {
         payerUsername: "payer_hybrid_3",
       });
 
-      assert.strictEqual(settled.status, "FORWARD_PENDING");
-      assert(settled.payoutError?.includes("RPC_OUTAGE_ON_REQUEST"));
+      assert.strictEqual(settled.status, "SETTLING");
+      try {
+        await dbService.retryForwardRequest(reqId);
+      } catch (e: any) {}
+      const updated = (await dbService.getRequestById(reqId))!;
+      assert.strictEqual(updated.status, "FORWARD_PENDING");
+      assert(updated.payoutError?.includes("RPC_OUTAGE_ON_REQUEST"));
 
       // Restore payout mock
       zallet.sendShieldedPayout = async () => ({
@@ -190,7 +203,7 @@ async function main() {
       });
 
       const pendingCheck = await dbService.getPayLinkBySlug(link.slug);
-      assert.strictEqual(pendingCheck?.status, "FORWARD_PENDING");
+      assert(pendingCheck?.status === "SETTLING" || pendingCheck?.status === "FORWARD_PENDING");
 
       // Step 2: Wallet recovers
       zallet.sendShieldedPayout = async () => ({
@@ -229,6 +242,7 @@ async function main() {
       zallet.verifyPaymentTransaction = async () => ({
         verified: true,
         actualAmountZec: 0.9995,
+        confirmations: 1,
       });
 
       zallet.sendShieldedPayout = async (_addr, amount) => {
@@ -240,6 +254,7 @@ async function main() {
         slug: link.slug,
         paidTxid: `valid_test_deficit_${Date.now()}`,
       });
+      await dbService.retryForwardPayLink(link.slug);
 
       // Net payout should be 0.9995 - 0.0001 = 0.9994 ZEC, NOT 1.0 - 0.0001 = 0.9999 ZEC
       assert.strictEqual(payoutAmountCaptured, 0.9994);

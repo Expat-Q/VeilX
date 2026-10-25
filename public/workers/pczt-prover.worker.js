@@ -1,7 +1,7 @@
 // Web Worker (ES Module) for Offscreen Halo 2 Proof computation (ZIP-374 / ZIP-225)
 // Runs in background thread without blocking the browser UI thread (60 FPS maintained).
 
-import init, * as wasmModule from '/wasm/veilx_wallet.js';
+import init, * as wasmModule from '/wasm/veilx_wallet.js?v=2026';
 
 let wasmInitialized = false;
 let proverWarmed = false;
@@ -161,7 +161,7 @@ self.onmessage = async (event) => {
 
         orchardActionBundle = {
           actions: formattedActions,
-          flags: provedBundle.flags !== undefined ? provedBundle.flags : 0x01,
+          flags: provedBundle.flags !== undefined ? (provedBundle.flags === 0x01 ? 0x02 : provedBundle.flags) : 0x02,
           valueBalanceZats: provedBundle.valueBalanceZats !== undefined
             ? provedBundle.valueBalanceZats
             : -Math.abs(payoutVal),
@@ -176,7 +176,7 @@ self.onmessage = async (event) => {
             createSyntheticAction(false),
             createSyntheticAction(true),
           ],
-          flags: 0x01,
+          flags: 0x02,
           valueBalanceZats: -Math.abs(payoutVal),
           anchorHex: emptyAnchor,
           proofHex: "00".repeat(192),

@@ -39,16 +39,32 @@ const nextConfig = {
         headers: [
           {
             key: 'Cache-Control',
-            value: 'public, max-age=31536000, immutable',
+            value: 'no-cache, no-store, must-revalidate',
+          },
+        ],
+      },
+      {
+        source: '/workers/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'no-cache, no-store, must-revalidate',
           },
         ],
       },
     ];
   },
   async rewrites() {
-    // 100% Vercel Native: All API routes execute directly as serverless functions.
-    // No cross-cloud proxying or sleeping container dependencies.
-    return [];
+    return [
+      {
+        source: '/wasm',
+        destination: '/wasm/index.js',
+      },
+      {
+        source: '/wasm/',
+        destination: '/wasm/index.js',
+      },
+    ];
   },
 };
 

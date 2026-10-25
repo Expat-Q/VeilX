@@ -21,7 +21,7 @@ export function ShowcaseSection({ onLaunchApp }: ShowcaseSectionProps) {
               Zero public trace.
             </h2>
             <p className="text-sm sm:text-base text-brown-300 max-w-md font-normal leading-relaxed tracking-normal">
-              Tip any X user before they even join VeilX. Let them claim 100% of their ZEC using their personal Zcash wallet whenever they are ready.
+              Tip any X user before they even join VeilX. Let them claim their ZEC using their personal Zcash wallet whenever they are ready.
             </p>
           </div>
 
@@ -48,7 +48,7 @@ export function ShowcaseSection({ onLaunchApp }: ShowcaseSectionProps) {
             <div className="space-y-1">
               <h4 className="text-base font-bold text-brown-950">Dynamic ZIP-321 QR Handoff</h4>
               <p className="text-xs text-brown-500 leading-relaxed">
-                Scan with mobile wallets like Zodl or Ywallet with prefilled amounts and memos.
+                Scan with mobile wallets like Zashi or YWallet with prefilled amounts and memos.
               </p>
             </div>
           </div>
@@ -61,7 +61,7 @@ export function ShowcaseSection({ onLaunchApp }: ShowcaseSectionProps) {
             <div className="space-y-1">
               <h4 className="text-base font-bold text-brown-950">Encrypted Notes & Identities</h4>
               <p className="text-xs text-brown-500 leading-relaxed">
-                Transactions settle in the Ironwood shielded pool with zero address leakage.
+                Transactions settle in the Orchard shielded pool with zero address leakage.
               </p>
             </div>
           </div>

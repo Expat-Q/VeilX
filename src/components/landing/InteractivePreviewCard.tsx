@@ -24,7 +24,7 @@ export function InteractivePreviewCard() {
             </span>
           </div>
           <span className="text-[11px] font-mono font-semibold text-brown-500 bg-butter-100 px-2 py-0.5 rounded-md border border-butter-200">
-            NU6.3 Ironwood
+            NU5 Orchard
           </span>
         </div>
 

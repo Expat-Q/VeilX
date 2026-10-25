@@ -1,7 +1,7 @@
 /**
  * Zcash Browser Extension & Mobile Wallet Integration
  * Uses official @noir-wallet/sdk for Noir Wallet extension interaction,
- * with fallbacks for Keystop, generic Zcash Web3 providers, and mobile deep links (ZODL).
+ * with fallbacks for Keystop, generic Zcash Web3 providers, and official mobile ZIP-321 deep links.
  */
 
 import {
@@ -93,7 +93,7 @@ export const detectAvailableWallets = (): WalletDetectionResult => {
   // 2. Keystop Extension
   const hasKeystop = !!(window.keystop && window.keystop.isKeystop);
 
-  // 3. VeilX NU7 Extension or Generic Zcash Web3 Provider
+  // 3. VeilX Shielded Extension or Generic Zcash Web3 Provider
   const hasVeilXExt = !!(
     (window as any).veilx?.isVeilX || (window.zcash as any)?.isVeilX
   );
@@ -119,7 +119,7 @@ export const detectAvailableWallets = (): WalletDetectionResult => {
   const isMobile = isMobileDevice();
 
   let detectedWalletName: string | undefined;
-  if (hasVeilXExt) detectedWalletName = "VeilX NU7 Wallet";
+  if (hasVeilXExt) detectedWalletName = "VeilX Shielded Wallet";
   else if (hasNoir) detectedWalletName = "Noir Wallet";
   else if (hasKeystop) detectedWalletName = "Keystop Wallet";
   else if (hasZcashWeb3) detectedWalletName = "Zcash Web3";
@@ -438,7 +438,7 @@ export function getMobileWalletDeepLinks(params: {
   const base64urlMemo = isShielded && params.memo ? encodeZip321Memo(params.memo.trim()) : "";
   const memoParam = base64urlMemo ? `&memo=${base64urlMemo}` : "";
   const standardUri = buildZip321Uri(params);
-  const zodlScheme = `zodl://pay?address=${params.address}&amount=${params.amountZec}${memoParam}`;
+  const zodlScheme = standardUri;
 
   return {
     standardUri,

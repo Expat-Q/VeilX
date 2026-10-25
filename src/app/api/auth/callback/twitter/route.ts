@@ -13,14 +13,15 @@ export async function GET(req: NextRequest) {
   const cookieStore = cookies();
   const savedState = cookieStore.get("oauth_state")?.value;
   const codeVerifier = cookieStore.get("oauth_code_verifier")?.value;
+  const savedCallbackUrl = cookieStore.get("oauth_callback_url")?.value;
 
   if (!code || !state || !savedState || state !== savedState || !codeVerifier) {
     return NextResponse.redirect(new URL("/?error=invalid_oauth_state", req.url));
   }
 
   try {
-    // 1. Exchange code for access token
-    const tokenData = await exchangeCodeForToken(code, codeVerifier);
+    // 1. Exchange code for access token using matching callback URL
+    const tokenData = await exchangeCodeForToken(code, codeVerifier, savedCallbackUrl);
 
     // 2. Fetch authenticated user profile from Twitter API v2
     const twitterUser = await getTwitterMe(tokenData.access_token);

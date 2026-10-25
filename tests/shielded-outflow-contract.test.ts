@@ -268,8 +268,8 @@ async function main() {
       `valueBalanceOrchard must equal -${TEST_PAYOUT_ZATS}`
     );
 
-    // Flags must be 0x01 (spendsDisabled = 1, outputsEnabled = 1)
-    assert.strictEqual(parsed.flags, 0x01, "Flags must be 0x01 (spendsDisabled=true, outputsEnabled=true)");
+    // Flags must be 0x02 (ZIP-225 Section 7.1: enableOutputsOrchard = 1, enableSpendsOrchard = 0)
+    assert.strictEqual(parsed.flags, 0x02, "Flags must be 0x02 (spendsDisabled=true, outputsEnabled=true)");
   });
 
   // 6. Network Consensus Branch ID Verification (Nu5 Mainnet vs Testnet)
@@ -284,7 +284,7 @@ async function main() {
       },
       orchardBundle: {
         actions: [createMockOrchardAction(), createMockOrchardAction()],
-        flags: 0x01,
+        flags: 0x02,
         valueBalanceZats: -100000,
         anchorHex: EMPTY_TREE_ANCHOR,
         proofHex: "00",
@@ -305,7 +305,7 @@ async function main() {
       },
       orchardBundle: {
         actions: [createMockOrchardAction(), createMockOrchardAction()],
-        flags: 0x01,
+        flags: 0x02,
         valueBalanceZats: -100000,
         anchorHex: EMPTY_TREE_ANCHOR,
         proofHex: "00",

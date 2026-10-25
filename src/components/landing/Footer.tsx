@@ -11,10 +11,10 @@ export function Footer() {
       href: "https://z.cash",
     },
     {
-      title: "Ironwood NU6.3",
+      title: "NU5 / Halo 2 Orchard",
       desc: "Latest Zcash network upgrade utilizing modern recursive Halo2 proving systems.",
       icon: Cpu,
-      href: "https://z.cash/upgrade/nu6-3/",
+      href: "https://z.cash/upgrade/nu5/",
     },
     {
       title: "Zallet Engine",

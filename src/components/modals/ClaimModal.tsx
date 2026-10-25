@@ -64,6 +64,9 @@ export interface ClaimModalProps {
     payoutError?: string;
   } | null;
   onClaimSuccess?: (tipId?: string) => void;
+  queueIndex?: number;
+  totalInQueue?: number;
+  onClaimNext?: () => void;
 }
 
 function sanitizeErrorMessage(err: any): { friendly: string; technical: string } {
@@ -108,11 +111,15 @@ export function ClaimModal({
   onClose,
   tip,
   onClaimSuccess,
+  queueIndex,
+  totalInQueue,
+  onClaimNext,
 }: ClaimModalProps) {
   const [recipientAddress, setRecipientAddress] = useState("");
   const [claimState, setClaimState] = useState<ClaimModalState>("IDLE");
   const [isAutoFilling, setIsAutoFilling] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [isEditingAddress, setIsEditingAddress] = useState(false);
 
   // Prover progress
   const [proverStage, setProverStage] = useState<string>("");
@@ -206,6 +213,7 @@ export function ClaimModal({
     setErrorTechnical("");
     setShowTechDetails(false);
     setInlineNotice(null);
+    setIsEditingAddress(false);
     setOutflowTxid(null);
     setPayoutOpid(null);
   };
@@ -466,14 +474,18 @@ export function ClaimModal({
       case "IDLE":
       default:
         return {
-          title: tip.title
+          title: totalInQueue && totalInQueue > 1
+            ? `Claim Pending Tip (${(queueIndex || 0) + 1} of ${totalInQueue})`
+            : tip.title
             ? `Disburse: ${tip.title}`
             : tip.type === "paylink"
             ? "Disburse PayLink Invoice"
             : tip.type === "request"
             ? "Disburse Payment Request"
             : "Claim Your Shielded Tip",
-          subtitle: "Withdraw funds directly to your shielded Orchard or transparent Zcash address.",
+          subtitle: totalInQueue && totalInQueue > 1
+            ? `Disbursing tip ${(queueIndex || 0) + 1} of ${totalInQueue} directly into your private shielded balance.`
+            : "Withdraw funds directly to your shielded Orchard or transparent Zcash address.",
         };
     }
   };
@@ -564,12 +576,21 @@ export function ClaimModal({
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-brown-900">
-                  Your Payout Address (u1...)
+                  Payout Address (t1... or u1...)
                 </label>
-                {isLockedAddress ? (
-                  <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                    🔒 Locked to settlement address
-                  </span>
+                {isLockedAddress && !isEditingAddress ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                      🔒 Preset Payout Address
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingAddress(true)}
+                      className="text-[11px] font-bold text-brown-700 hover:text-brown-950 underline transition-colors"
+                    >
+                      Change
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"
@@ -592,10 +613,16 @@ export function ClaimModal({
                 )}
               </div>
 
-              {isLockedAddress ? (
-                <div className="p-2.5 bg-butter-50/60 border border-butter-300 rounded-xl font-mono text-xs text-brown-900 break-all select-all">
-                  {recipientAddress}
-                </div>
+              {isLockedAddress && !isEditingAddress ? (
+                <>
+                  <div className="p-2.5 bg-butter-50/60 border border-butter-300 rounded-xl font-mono text-xs text-brown-900 break-all select-all">
+                    {recipientAddress}
+                  </div>
+                  <p className="text-[11px] text-brown-600 flex items-center gap-1 mt-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                    <span>Payout will be sent to the merchant&apos;s registered payout address. Click &ldquo;Change&rdquo; above to send to a different address.</span>
+                  </p>
+                </>
               ) : (
                 <Input
                   value={recipientAddress}
@@ -603,7 +630,7 @@ export function ClaimModal({
                     setRecipientAddress(e.target.value);
                     setInlineNotice(null);
                   }}
-                  placeholder="u1... (Your personal shielded Orchard address from Zashi or YWallet)"
+                  placeholder="t1... or u1... (Personal address from Zashi, YWallet, or ZecWallet)"
                   className={`font-mono text-xs ${
                     addressValidation
                       ? addressValidation.isValid
@@ -955,9 +982,23 @@ export function ClaimModal({
               </div>
             )}
 
+            {onClaimNext && (
+              <Button
+                onClick={() => {
+                  setClaimState("IDLE");
+                  onClaimNext();
+                }}
+                variant="primary"
+                className="w-full h-11 text-xs font-bold gap-2 shadow-subtle cursor-pointer"
+              >
+                <span>Claim Next Tip ({(queueIndex || 0) + 2} of {totalInQueue})</span>
+                <ArrowRight className="w-4 h-4" />
+              </Button>
+            )}
+
             <Button
               onClick={handleFullClose}
-              variant="outline"
+              variant={onClaimNext ? "outline" : "primary"}
               className="w-full h-10 text-xs font-semibold cursor-pointer"
             >
               Done

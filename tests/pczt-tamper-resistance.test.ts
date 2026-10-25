@@ -131,7 +131,7 @@ function createDummyProofBundle(valueBalanceZats: number, actionCount: number = 
 
   return {
     actions,
-    flags: 0x01,
+    flags: 0x02,
     valueBalanceZats,
     anchorHex: "0000000000000000000000000000000000000000000000000000000000000000",
     proofHex: crypto.randomBytes(192).toString("hex"),

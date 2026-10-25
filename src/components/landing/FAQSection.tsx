@@ -34,15 +34,15 @@ export function FAQSection({ onLaunchApp }: FAQSectionProps) {
     },
     {
       q: "Who pays the transaction fees?",
-      a: "VeilX subsidizes the 0.0001 ZEC network claim fee. The recipient receives 100% of the exact tip amount you sent.",
+      a: "The recipient pays the standard 0.0001 ZEC ZIP-317 network miner fee upon claiming funds to their private wallet. Tips must be at least 0.0002 ZEC so the recipient receives at least 0.0001 ZEC net payout.",
     },
     {
       q: "Does VeilX hold my private keys?",
-      a: "Never. Senders pay from their own self-custodial wallets (like Zodl or Noir), and recipients claim directly to their own private addresses.",
+      a: "Never. Senders pay from their own self-custodial wallets (like Zashi, YWallet, or Noir), and recipients claim directly to their own private addresses.",
     },
     {
       q: "Which wallets can I use with VeilX?",
-      a: "You can use any shielded Zcash wallet, including Zodl (Zashi), Ywallet, Zingo, or the Noir browser extension.",
+      a: "You can use any shielded Zcash wallet, including Zashi, YWallet, Zingo!, or the Noir browser extension.",
     },
   ];
 

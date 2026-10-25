@@ -26,6 +26,7 @@ pub struct SignTxParams {
     pub amount_zatoshis: u64,
     pub current_block_height: u32,
     pub consensus_branch_id: Option<u32>,
+    pub anchor_hex: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -67,6 +68,7 @@ pub fn build_and_sign_transaction(params_val: JsValue) -> Result<JsValue, JsValu
         params.amount_zatoshis,
         params.current_block_height,
         branch_id,
+        params.anchor_hex.as_deref(),
     )
     .map_err(|e| JsValue::from_str(&e))?;
 
@@ -82,6 +84,7 @@ pub struct ShieldingTxParams {
     pub memo: Option<String>,
     pub current_block_height: u32,
     pub consensus_branch_id: Option<u32>,
+    pub anchor_hex: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -101,6 +104,7 @@ pub fn build_v5_shielding_transaction(params_val: JsValue) -> Result<JsValue, Js
         params.memo.as_deref(),
         params.current_block_height,
         branch_id,
+        params.anchor_hex.as_deref(),
     )
     .map_err(|e| JsValue::from_str(&e))?;
 

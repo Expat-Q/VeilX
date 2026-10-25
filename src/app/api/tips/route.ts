@@ -36,9 +36,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (isNaN(numericAmount) || !isFinite(numericAmount) || numericAmount < 0.0001 || numericAmount > 100000) {
+    if (isNaN(numericAmount) || !isFinite(numericAmount) || numericAmount < 0.0002 || numericAmount > 100000) {
       return NextResponse.json(
-        { error: "Invalid amount. Must be a valid number between 0.0001 and 100,000 ZEC." },
+        { error: "Invalid amount. Minimum tip is 0.0002 ZEC (to cover the 0.0001 ZEC Zcash network miner fee)." },
         { status: 400 }
       );
     }

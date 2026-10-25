@@ -386,8 +386,8 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
           setWalletAddress(conn.address);
           setWalletChainId(conn.chainId);
         } else {
-          payerAddress = "0x71C8366431a533590Ec479a1dEF800470f560299";
-          setWalletAddress(payerAddress);
+          throw new Error("No EVM wallet detected. Please connect a browser wallet.");
+
         }
       }
 
@@ -994,6 +994,11 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
               onChange={setAmountZec}
               currencySymbol="ZEC"
               label="Tip Amount (ZEC)"
+              error={
+                amountZec && parseFloat(amountZec) > 0 && parseFloat(amountZec) < 0.0002
+                  ? "Minimum tip is 0.0002 ZEC (to cover the 0.0001 ZEC network miner fee on claim)"
+                  : undefined
+              }
             />
           )}
 
@@ -1021,7 +1026,7 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
               disabled={
                 payMethod === "cross_chain"
                   ? !tokenDepositAmount || parseFloat(tokenDepositAmount) <= 0
-                  : !amountZec || parseFloat(amountZec) <= 0
+                  : !amountZec || parseFloat(amountZec) < 0.0002
               }
             >
               <span>Review Tip</span>
@@ -1053,7 +1058,7 @@ export function TipModal({ isOpen, onClose, onSuccess }: TipModalProps) {
               <span className="font-bold text-brown-950">
                 {payMethod === "cross_chain"
                   ? `${selectedToken.symbol} (${selectedToken.networkName}) ➔ Shielded ZEC`
-                  : "Direct Shielded ZEC (NU6.3)"}
+                  : "Direct Shielded ZEC (Orchard)"}
               </span>
             </div>
 

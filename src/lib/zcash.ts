@@ -29,9 +29,9 @@ export interface ZcashNetworkConfig {
 export const NETWORK_CONFIGS: Record<"mainnet" | "testnet", ZcashNetworkConfig> = {
   mainnet: {
     network: "mainnet",
-    consensusBranchId: 0xc2d6d0b4,
-    consensusBranchIdHex: "c2d6d0b4",
-    versionGroupId: 0x26a7270a,
+    consensusBranchId: 0x37a5165b,
+    consensusBranchIdHex: "37a5165b",
+    versionGroupId: 0xd884b698,
     transparentPrefix: {
       p2pkh: [0x1c, 0xb8],
       p2sh: [0x1c, 0xbd],
@@ -170,14 +170,14 @@ export function serializeV6ShieldedTransaction(params: ShieldedV6TransactionPara
   const branchId = params.consensusBranchId ?? getNetworkConfig().consensusBranchId;
   const chunks: Buffer[] = [];
 
-  // 1. Header (4 bytes: v6 + overwintered)
+  // 1. Header (4 bytes: v5 + overwintered: ZIP-225)
   const headerBuf = Buffer.alloc(4);
-  headerBuf.writeUInt32LE(0x80000006, 0);
+  headerBuf.writeUInt32LE(0x80000005, 0);
   chunks.push(headerBuf);
 
-  // 2. VersionGroupId (4 bytes: 0xd884b698)
+  // 2. VersionGroupId (4 bytes: 0x26a7270a: ZIP-225)
   const vgroupIdBuf = Buffer.alloc(4);
-  vgroupIdBuf.writeUInt32LE(0xd884b698, 0);
+  vgroupIdBuf.writeUInt32LE(0x26a7270a, 0);
   chunks.push(vgroupIdBuf);
 
   // 3. ConsensusBranchId (4 bytes LE)
@@ -345,8 +345,10 @@ export function serializeV5ShieldingTransaction(params: ShieldedV5TransactionPar
     chunks.push(Buffer.from(act.outCiphertext, "hex"));
   }
 
-  // Flags: 1 byte (0x01: spendsDisabled=1, outputsEnabled=1)
-  chunks.push(Buffer.from([orchard.flags]));
+  // Flags: 1 byte (ZIP-225 Section 7.1: bit 1 = enableOutputsOrchard -> 0x02)
+  const flagsByte =
+    orchard.flags === 0x01 || orchard.flags === 0x02 ? 0x02 : orchard.flags;
+  chunks.push(Buffer.from([flagsByte]));
 
   // ValueBalance: 8 bytes i64 LE (negative value for outflow into Orchard)
   const valBuf = Buffer.alloc(8);
@@ -483,16 +485,42 @@ export class ZalletClient {
     }
   }
 
+  private getEffectiveUrl(): string {
+    return process.env.ZALLET_RPC_URL || this.url || ZALLET_RPC_URL;
+  }
+
+  private getEffectiveHeaders(): Record<string, string> {
+    const apiKey = process.env.ZALLET_RPC_API_KEY || process.env.NOWNODES_API_KEY || "";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (apiKey) {
+      headers["api-key"] = apiKey;
+      headers["x-api-key"] = apiKey;
+    } else {
+      const user = process.env.ZALLET_RPC_USER || ZALLET_RPC_USER;
+      const pass = process.env.ZALLET_RPC_PASS || ZALLET_RPC_PASS;
+      if (user && pass) {
+        const creds = Buffer.from(`${user}:${pass}`).toString("base64");
+        headers["Authorization"] = `Basic ${creds}`;
+      }
+    }
+    return headers;
+  }
+
   async call<T = any>(method: string, params: any[] = [], customTimeoutMs?: number): Promise<T> {
-    const defaultTimeout = method === "z_sendmany" || method === "z_shieldcoinbase" ? 8000 : 8000;
+    const defaultTimeout =
+      method === "sendrawtransaction" || method === "z_sendmany" || method === "z_shieldcoinbase"
+        ? 25000
+        : 12000;
     const timeoutMs = customTimeoutMs || defaultTimeout;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const res = await fetch(this.url, {
+      const effectiveUrl = this.getEffectiveUrl();
+      const effectiveHeaders = this.getEffectiveHeaders();
+      const res = await fetch(effectiveUrl, {
         method: "POST",
-        headers: this.headers,
+        headers: effectiveHeaders,
         body: JSON.stringify({
           jsonrpc: "2.0",
           id: crypto.randomBytes(4).toString("hex"),
@@ -502,13 +530,20 @@ export class ZalletClient {
         signal: controller.signal,
       });
 
-      if (!res.ok) {
-        throw new Error(`Zallet RPC HTTP error: ${res.statusText}`);
+      const text = await res.text();
+      let json: any = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = null;
       }
 
-      const json = await res.json();
-      if (json.error) {
+      if (json?.error) {
         throw new Error(`Zallet RPC Error (${json.error.code}): ${json.error.message}`);
+      }
+
+      if (!res.ok) {
+        throw new Error(`Zallet RPC HTTP error: ${res.status} ${res.statusText} - ${text}`);
       }
 
       return json.result as T;
@@ -688,7 +723,7 @@ export class ZalletClient {
   async getLiveOrchardAnchor(): Promise<string> {
     const info = await this.getBlockchainInfo();
     const treeState = await this.call<any>("z_gettreestate", [info.blocks.toString()]);
-    const root = treeState?.orchard?.commitments?.finalRoot || treeState?.ironwood?.commitments?.finalRoot;
+    const root = treeState?.ironwood?.commitments?.finalRoot || treeState?.orchard?.commitments?.finalRoot;
     if (!root) {
       throw new Error(`Failed to retrieve live Orchard anchor at block height ${info.blocks}`);
     }
@@ -696,18 +731,49 @@ export class ZalletClient {
   }
 
   /**
-   * Queries unspent transaction outputs (UTXOs) for the platform escrow transparent vault
+   * Queries unspent transaction outputs (UTXOs) for an escrow transparent address.
+   * If node getaddressutxos fails or returns empty, seamlessly resolves directly from fundingTxid.
    */
-  async getEscrowUtxos(address?: string): Promise<any[]> {
+  async getEscrowUtxos(address?: string, fundingTxid?: string): Promise<any[]> {
     const escrowAddr = address || process.env.ESCROW_PLATFORM_TRANSPARENT_ADDRESS;
     if (!escrowAddr) return [];
     try {
       const res = await this.call<any[]>("getaddressutxos", [{ addresses: [escrowAddr] }]);
-      return Array.isArray(res) ? res : [];
+      if (Array.isArray(res) && res.length > 0) {
+        return res;
+      }
     } catch (err: any) {
-      console.warn(`[Escrow] Failed to query UTXOs for ${escrowAddr}:`, err?.message || err);
-      return [];
+      console.warn(`[Escrow] Failed to query UTXOs for ${escrowAddr} via getaddressutxos:`, err?.message || err);
     }
+
+    // High-reliability fallback: Resolve UTXO directly from the entity's confirmed funding txid
+    if (fundingTxid) {
+      try {
+        const rawTx = await this.call<any>("getrawtransaction", [fundingTxid.trim(), 1]);
+        if (rawTx && Array.isArray(rawTx.vout)) {
+          for (let i = 0; i < rawTx.vout.length; i++) {
+            const out = rawTx.vout[i];
+            const addresses: string[] =
+              out.scriptPubKey?.addresses || (out.scriptPubKey?.address ? [out.scriptPubKey.address] : []);
+            if (addresses.includes(escrowAddr)) {
+              return [
+                {
+                  txid: fundingTxid.trim(),
+                  outputIndex: typeof out.n === "number" ? out.n : i,
+                  satoshis: Math.round((out.value || 0) * 1e8),
+                  address: escrowAddr,
+                  script: out.scriptPubKey.hex,
+                },
+              ];
+            }
+          }
+        }
+      } catch (rawErr: any) {
+        console.warn(`[Escrow] Failed to resolve UTXO from fundingTxid ${fundingTxid}:`, rawErr?.message || rawErr);
+      }
+    }
+
+    return [];
   }
 
   /**
@@ -852,7 +918,7 @@ export class ZalletClient {
 
         // A. If transparent UTXOs are available, spend transparently to recipient's shielded address
         if (escrowTransparentAddr && escrowTransparentKey) {
-          const utxos = await this.getEscrowUtxos(escrowTransparentAddr).catch(() => []);
+          const utxos = await this.getEscrowUtxos(escrowTransparentAddr, fundingTxid).catch(() => []);
           let accumulatedZats = 0n;
           const selectedUtxos: any[] = [];
           for (const u of utxos) {
@@ -863,6 +929,10 @@ export class ZalletClient {
 
           if (accumulatedZats >= targetZats) {
             const branchId = getNetworkConfig().consensusBranchId;
+            const liveAnchor = await this.getLiveOrchardAnchor().catch((err: any) => {
+              console.warn("[Escrow Outflow] Failed to retrieve live Orchard/Ironwood anchor:", err?.message || err);
+              return undefined;
+            });
             const signed = wasm.build_and_sign_transaction({
               private_key_hex: escrowTransparentKey,
               utxos: selectedUtxos.map((u) => ({
@@ -874,6 +944,7 @@ export class ZalletClient {
               amount_zatoshis: amountZats,
               current_block_height: info.blocks,
               consensus_branch_id: branchId,
+              anchor_hex: liveAnchor,
             });
 
             if (signed?.raw_hex) {

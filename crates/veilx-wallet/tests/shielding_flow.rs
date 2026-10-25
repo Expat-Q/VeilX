@@ -53,7 +53,8 @@ fn test_shielding_v5_pure_orchard_direct() {
         expected_payout,
         Some("VeilX Direct Shielding Integration"),
         4500000,
-        TESTNET_IRONWOOD_BRANCH_ID,
+        MAINNET_NU5_BRANCH_ID,
+        None,
     )
     .expect("Shielding transaction build must succeed");
 
@@ -94,7 +95,7 @@ fn test_shielding_v5_pure_orchard_direct() {
 
     let flags = raw[offset];
     offset += 1;
-    assert_eq!(flags, 0x01, "Flags must be 0x01");
+    assert_eq!(flags, 0x02, "Flags must be 0x02");
 
     let mut val_bytes = [0u8; 8];
     val_bytes.copy_from_slice(&raw[offset..offset + 8]);
@@ -131,6 +132,7 @@ fn test_build_and_sign_v5_routes_pure_orchard() {
         90_000,
         2800000,
         MAINNET_NU5_BRANCH_ID,
+        None,
     )
     .expect("Must route pure UA without throwing missing transparent receiver error");
 
@@ -186,6 +188,7 @@ fn test_pczt_shielding_prover_and_finalize_flow() {
         expiry_height: 4400000,
         network: "testnet".to_string(),
         consensus_branch_id: Some(TESTNET_IRONWOOD_BRANCH_ID),
+        anchor_hex: None,
     };
 
     // 1. Client proves shielding parameters in Web Worker

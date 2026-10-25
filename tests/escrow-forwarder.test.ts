@@ -71,8 +71,7 @@ async function main() {
     });
 
     assert(request, "Request should be created");
-    assert.strictEqual(request.escrowDepositAddress, "u1testescrowaddress999999999999999999999999999999999999999999999999999999999999999999");
-    assert.strictEqual(request.diversifierIndex, "42");
+    assert(request.escrowDepositAddress && request.escrowDepositAddress.startsWith("t1"), "Should generate deterministic t1 escrow address");
     assert.strictEqual(request.status, "PENDING");
   });
 
@@ -110,8 +109,7 @@ async function main() {
     });
 
     assert(paylink, "PayLink should be created");
-    assert.strictEqual(paylink.escrowDepositAddress, "u1testescrowaddress999999999999999999999999999999999999999999999999999999999999999999");
-    assert.strictEqual(paylink.diversifierIndex, "42");
+    assert(paylink.escrowDepositAddress && paylink.escrowDepositAddress.startsWith("t1"), "Should generate deterministic t1 escrow address");
     assert.strictEqual(paylink.status, "UNPAID");
   });
 

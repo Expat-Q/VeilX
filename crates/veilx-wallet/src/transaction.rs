@@ -12,6 +12,9 @@ pub const MAINNET_NU5_BRANCH_ID: u32 = 0xC2D6D0B4;
 pub const TX_VERSION_5_HEADER: [u8; 4] = [0x05, 0x00, 0x00, 0x80]; // v5 + overwintered
 pub const VERSION_GROUP_ID_V5: [u8; 4] = [0x0A, 0x27, 0xA7, 0x26]; // 0x26A7270A LE
 
+pub const TX_VERSION_6_HEADER: [u8; 4] = [0x06, 0x00, 0x00, 0x80]; // v6 + overwintered
+pub const VERSION_GROUP_ID_V6: [u8; 4] = [0x98, 0xB6, 0x84, 0xD8]; // 0xD884B698 LE
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UtxoInput {
     pub txid: String,
@@ -91,15 +94,15 @@ pub fn p2pkh_script(hash160: &[u8; 20]) -> Vec<u8> {
     script
 }
 
-/// Builds and signs a complete Zcash Version 5 shielding transaction ($t \to z$) under ZIP-225.
+/// Builds and signs a complete Zcash shielding transaction ($t \to z$) under ZIP-225 (V5) or ZIP-229 (V6).
 ///
 /// Disburses payment from a transparent escrow UTXO to a shielded Orchard recipient address:
 /// - 1 transparent input spending the deterministic escrow address UTXO, signed via secp256k1 ECDSA.
 /// - EXACTLY 0 transparent outputs (`nOutputs = 0`). Under no circumstances is a transparent recipient output created!
-/// - Orchard Action Bundle with at least 2 actions (1 real recipient action + 1 dummy padding action).
-/// - flags = 0x01 (spendsDisabled = true, outputsEnabled = true).
-/// - valueBalanceOrchard = -payoutZats.
-/// - anchorOrchard = [0u8; 32] (Anchor::empty_tree(), never expires!).
+/// - Orchard / Ironwood Action Bundle with at least 2 actions (1 real recipient action + 1 dummy padding action).
+/// - flags = 0x02 (spendsDisabled = true, outputsEnabled = true).
+/// - valueBalance = -payoutZats.
+/// - On NU6.3 (Ironwood), uses V6 format and live anchor from blockchain.
 /// - RedPallas binding signature over the ZIP-244 sighash.
 pub fn build_v5_shielding_transaction(
     private_key_hex: &str,
@@ -109,6 +112,7 @@ pub fn build_v5_shielding_transaction(
     memo: Option<&str>,
     current_block_height: u32,
     consensus_branch_id: u32,
+    anchor_hex: Option<&str>,
 ) -> Result<SignedTransaction, String> {
     if utxos.is_empty() {
         return Err("No UTXO inputs provided for shielding.".to_string());
@@ -152,7 +156,7 @@ pub fn build_v5_shielding_transaction(
     }
 
     // Pure shielding invariant: zero transparent outputs. All net funds (total_in - fee)
-    // are shielded into the Orchard pool for the recipient.
+    // are shielded into the Orchard/Ironwood pool for the recipient.
     let payout_zats = if amount_zatoshis > 0 && amount_zatoshis == total_in - fee {
         amount_zatoshis
     } else {
@@ -161,11 +165,17 @@ pub fn build_v5_shielding_transaction(
 
     let expiry_height = current_block_height + 50;
     let lock_time = 0u32;
+    let is_ironwood = consensus_branch_id == TESTNET_IRONWOOD_BRANCH_ID;
 
     // 1. Header Digest: BLAKE2b-256("ZTxIdHeadersHash", header || version_group || branch_id || lock_time || expiry)
     let mut header_data = Vec::with_capacity(20);
-    header_data.extend_from_slice(&TX_VERSION_5_HEADER);
-    header_data.extend_from_slice(&VERSION_GROUP_ID_V5);
+    if is_ironwood {
+        header_data.extend_from_slice(&TX_VERSION_6_HEADER);
+        header_data.extend_from_slice(&VERSION_GROUP_ID_V6);
+    } else {
+        header_data.extend_from_slice(&TX_VERSION_5_HEADER);
+        header_data.extend_from_slice(&VERSION_GROUP_ID_V5);
+    }
     header_data.extend_from_slice(&consensus_branch_id.to_le_bytes());
     header_data.extend_from_slice(&lock_time.to_le_bytes());
     header_data.extend_from_slice(&expiry_height.to_le_bytes());
@@ -197,9 +207,22 @@ pub fn build_v5_shielding_transaction(
 
     let sapling_digest = blake2b_personal(b"ZTxIdSaplingHash", &[]);
 
-    // 5. Precompute Orchard Bundle and Commitment
-    let anchor = orchard::tree::Anchor::empty_tree();
-    let bundle_version = orchard::bundle::BundleVersion::orchard_v2();
+    // 5. Precompute Shielded Bundle and Commitment
+    let (bundle_version, anchor, tx_version) = if is_ironwood {
+        let anchor_str = anchor_hex.ok_or_else(|| "Live anchor hex is required for Ironwood shielding transaction".to_string())?;
+        let anchor_raw = hex::decode(anchor_str).map_err(|e| format!("Invalid anchor hex: {}", e))?;
+        if anchor_raw.len() != 32 {
+            return Err(format!("Anchor must be 32 bytes, got {}", anchor_raw.len()));
+        }
+        let mut anchor_bytes = [0u8; 32];
+        anchor_bytes.copy_from_slice(&anchor_raw);
+        let anc = orchard::tree::Anchor::from_bytes(anchor_bytes).into_option()
+            .ok_or_else(|| "Invalid anchor bytes".to_string())?;
+        (orchard::bundle::BundleVersion::ironwood_v3(), anc, orchard::bundle::TxVersion::V6)
+    } else {
+        (orchard::bundle::BundleVersion::orchard_v2(), orchard::tree::Anchor::empty_tree(), orchard::bundle::TxVersion::V5)
+    };
+
     let flags = orchard::bundle::Flags::SPENDS_DISABLED;
     let mut builder = orchard::builder::Builder::new(
         orchard::builder::BundleType::DEFAULT,
@@ -231,12 +254,19 @@ pub fn build_v5_shielding_transaction(
         .map_err(|e| format!("Failed to build unauthorized bundle: {:?}", e))?
         .ok_or_else(|| "Bundle was empty".to_string())?;
 
-    let orchard_bundle_commitment: [u8; 32] = unauth_bundle
-        .commitment(orchard::bundle::TxVersion::V5)
+    let bundle_commitment: [u8; 32] = unauth_bundle
+        .commitment(tx_version)
         .map_err(|e| format!("Commitment error: {:?}", e))?
         .into();
 
-    let orchard_digest = orchard_bundle_commitment;
+    let empty_orchard_v6 = if is_ironwood {
+        Some(orchard::bundle::commitments::hash_bundle_txid_empty(
+            orchard::ValuePool::Orchard,
+            orchard::bundle::TxVersion::V6,
+        ).map_err(|e| format!("Empty orchard commitment error: {:?}", e))?)
+    } else {
+        None
+    };
 
     // 6. Precompute ZIP-244 S.2 digests for transparent inputs & shielded binding sig
     let mut amounts_data = Vec::with_capacity(utxos.len() * 8);
@@ -253,7 +283,7 @@ pub fn build_v5_shielding_transaction(
     tx_personal[0..12].copy_from_slice(b"ZcashTxHash_");
     tx_personal[12..16].copy_from_slice(&consensus_branch_id.to_le_bytes());
 
-    // Compute shielded sighash for Orchard binding signature
+    // Compute shielded sighash for binding signature
     let empty_txin_sig_digest = blake2b_personal(b"Zcash___TxInHash", &[]);
     let mut shielded_trans_sig_data = Vec::with_capacity(1 + 32 * 6);
     shielded_trans_sig_data.push(0x01u8); // SIGHASH_ALL
@@ -265,19 +295,24 @@ pub fn build_v5_shielding_transaction(
     shielded_trans_sig_data.extend_from_slice(&empty_txin_sig_digest);
     let shielded_trans_sig_digest = blake2b_personal(b"ZTxIdTranspaHash", &shielded_trans_sig_data);
 
-    let mut sighash_shielded_preimage = Vec::with_capacity(128);
+    let mut sighash_shielded_preimage = Vec::with_capacity(160);
     sighash_shielded_preimage.extend_from_slice(&header_digest);
     sighash_shielded_preimage.extend_from_slice(&shielded_trans_sig_digest);
     sighash_shielded_preimage.extend_from_slice(&sapling_digest);
-    sighash_shielded_preimage.extend_from_slice(&orchard_digest);
+    if let Some(ref eo) = empty_orchard_v6 {
+        sighash_shielded_preimage.extend_from_slice(eo.as_bytes());
+    }
+    sighash_shielded_preimage.extend_from_slice(&bundle_commitment);
     let sighash_shielded = blake2b_personal(&tx_personal, &sighash_shielded_preimage);
 
-    // 7. Prove and authorize Orchard Action Bundle
-    let (orchard_bundle, _) = crate::orchard_builder::build_and_prove_shielding_bundle(
+    // 7. Prove and authorize Action Bundle
+    let (shielded_bundle, _) = crate::orchard_builder::build_and_prove_shielding_bundle(
         &recipient_bytes,
         payout_zats,
         memo.map(|s| s.as_bytes()),
         &sighash_shielded,
+        anchor_hex,
+        is_ironwood,
     )?;
 
     // 8. Sign each transparent input under ZIP-244 S.2
@@ -305,11 +340,14 @@ pub fn build_v5_shielding_transaction(
         transparent_sig_data.extend_from_slice(&txin_sig_digest);
         let transparent_sig_digest = blake2b_personal(b"ZTxIdTranspaHash", &transparent_sig_data);
 
-        let mut sighash_preimage = Vec::with_capacity(128);
+        let mut sighash_preimage = Vec::with_capacity(160);
         sighash_preimage.extend_from_slice(&header_digest);
         sighash_preimage.extend_from_slice(&transparent_sig_digest);
         sighash_preimage.extend_from_slice(&sapling_digest);
-        sighash_preimage.extend_from_slice(&orchard_digest);
+        if let Some(ref eo) = empty_orchard_v6 {
+            sighash_preimage.extend_from_slice(eo.as_bytes());
+        }
+        sighash_preimage.extend_from_slice(&bundle_commitment);
         let sighash = blake2b_personal(&tx_personal, &sighash_preimage);
 
         let signature: Signature = signing_key.sign_prehash(&sighash)
@@ -327,21 +365,29 @@ pub fn build_v5_shielding_transaction(
     }
 
     // 9. Compute TxID
-    let mut txid_input = Vec::with_capacity(128);
+    let mut txid_input = Vec::with_capacity(160);
     txid_input.extend_from_slice(&header_digest);
     txid_input.extend_from_slice(&transparent_txid_digest);
     txid_input.extend_from_slice(&sapling_digest);
-    txid_input.extend_from_slice(&orchard_digest);
+    if let Some(ref eo) = empty_orchard_v6 {
+        txid_input.extend_from_slice(eo.as_bytes());
+    }
+    txid_input.extend_from_slice(&bundle_commitment);
     let raw_txid_digest = blake2b_personal(&tx_personal, &txid_input);
 
     let mut display_txid_bytes = raw_txid_digest;
     display_txid_bytes.reverse();
     let txid_hex = hex::encode(display_txid_bytes);
 
-    // 10. Serialize Full Version 5 Shielding Transaction
+    // 10. Serialize Full Shielding Transaction
     let mut raw = Vec::new();
-    raw.extend_from_slice(&TX_VERSION_5_HEADER);
-    raw.extend_from_slice(&VERSION_GROUP_ID_V5);
+    if is_ironwood {
+        raw.extend_from_slice(&TX_VERSION_6_HEADER);
+        raw.extend_from_slice(&VERSION_GROUP_ID_V6);
+    } else {
+        raw.extend_from_slice(&TX_VERSION_5_HEADER);
+        raw.extend_from_slice(&VERSION_GROUP_ID_V5);
+    }
     raw.extend_from_slice(&consensus_branch_id.to_le_bytes());
     raw.extend_from_slice(&lock_time.to_le_bytes());
     raw.extend_from_slice(&expiry_height.to_le_bytes());
@@ -365,9 +411,14 @@ pub fn build_v5_shielding_transaction(
     raw.push(0x00);
     raw.push(0x00);
 
-    // Orchard bundle
-    let raw_orchard = crate::orchard_builder::serialize_v5_orchard_bundle(&orchard_bundle)?;
-    raw.extend_from_slice(&raw_orchard);
+    // Orchard bundle in V6: 0 actions
+    if is_ironwood {
+        raw.push(0x00);
+    }
+
+    // Orchard / Ironwood bundle
+    let raw_shielded = crate::orchard_builder::serialize_v5_orchard_bundle(&shielded_bundle)?;
+    raw.extend_from_slice(&raw_shielded);
 
     Ok(SignedTransaction {
         txid: txid_hex,
@@ -377,7 +428,7 @@ pub fn build_v5_shielding_transaction(
     })
 }
 
-/// Builds and signs a complete Zcash Version 5 transaction.
+/// Builds and signs a complete Zcash Version 5 or 6 transaction.
 ///
 /// If `to_address` is a shielded Orchard address (Unified Address with Orchard receiver,
 /// or raw 43-byte hex address), it automatically routes to `build_v5_shielding_transaction`
@@ -391,6 +442,7 @@ pub fn build_and_sign_v5_transaction(
     amount_zatoshis: u64,
     current_block_height: u32,
     consensus_branch_id: u32,
+    anchor_hex: Option<&str>,
 ) -> Result<SignedTransaction, String> {
     if utxos.is_empty() {
         return Err("No UTXO inputs provided.".to_string());
@@ -418,6 +470,7 @@ pub fn build_and_sign_v5_transaction(
             None,
             current_block_height,
             consensus_branch_id,
+            anchor_hex,
         );
     }
 
@@ -642,6 +695,7 @@ mod tests {
             10_000_000, // 0.1 TAZ
             4476800,
             TESTNET_IRONWOOD_BRANCH_ID,
+            None,
         )
         .unwrap();
 
@@ -684,6 +738,7 @@ mod tests {
             90_000,
             2500000,
             MAINNET_NU5_BRANCH_ID,
+            None,
         )
         .expect("Shielding to pure Orchard UA must succeed");
 
@@ -729,7 +784,7 @@ mod tests {
         // Flags byte: 0x01
         let flags = raw_bytes[cursor];
         cursor += 1;
-        assert_eq!(flags, 0x01, "Flags must be 0x01 (spendsDisabled=true, outputsEnabled=true)");
+        assert_eq!(flags, 0x02, "Flags must be 0x02 (spendsDisabled=true, outputsEnabled=true)");
 
         // Value balance: -90,000 zats i64 LE
         let mut val_bytes = [0u8; 8];

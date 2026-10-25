@@ -2,7 +2,7 @@
 name = "veilx-wallet"
 version = "0.1.0"
 edition = "2021"
-description = "VeilX Shielded & Transparent Zcash NU7/Ironwood WebAssembly Engine"
+description = "VeilX Shielded & Transparent Zcash NU5 Halo 2 Orchard WebAssembly Engine"
 license = "MIT OR Apache-2.0"
 
 [lib]

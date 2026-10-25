@@ -57,7 +57,7 @@ export function privateKeyHexToZcashAddress(
  */
 export function deriveTipEscrowKeypair(
   entityId: string,
-  network?: "mainnet" | "testnet"
+  network: "mainnet" | "testnet" = "mainnet"
 ): {
   address: string;
   privateKeyHex: string;
@@ -85,8 +85,15 @@ export function deriveTipEscrowKeypair(
 }
 
 /**
+ * Convenience alias for deriveTipEscrowKeypair for unified escrow across tips, paylinks, and requests
+ */
+export const deriveTransparentEscrowKey = deriveTipEscrowKeypair;
+
+/**
  * Convenience helper to get just the unique transparent deposit address for an entity
  */
-export function getTipEscrowAddress(entityId: string): string {
-  return deriveTipEscrowKeypair(entityId).address;
+export function getTipEscrowAddress(entityId: string, network: "mainnet" | "testnet" = "mainnet"): string {
+  return deriveTipEscrowKeypair(entityId, network).address;
 }
+
+export const getTransparentEscrowAddress = getTipEscrowAddress;

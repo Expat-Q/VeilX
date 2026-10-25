@@ -71,7 +71,7 @@ export function HeroSection({ onLaunchApp, onExplore }: HeroSectionProps) {
                   </span>
                 </div>
                 <span className="text-[11px] font-mono font-bold text-brown-500 bg-butter-100 px-2.5 py-1 rounded-full border border-butter-300">
-                  Ironwood NU6.3
+                  NU5 Halo 2 Orchard
                 </span>
               </div>
 

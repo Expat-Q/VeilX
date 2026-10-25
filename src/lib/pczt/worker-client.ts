@@ -20,7 +20,7 @@ export function getSharedWorker(): Worker | null {
   if (typeof window === "undefined" || !window.Worker) return null;
   if (!globalProverWorker) {
     try {
-      globalProverWorker = new Worker("/workers/pczt-prover.worker.js", {
+      globalProverWorker = new Worker("/workers/pczt-prover.worker.js?v=2026", {
         type: "module",
       });
     } catch (e) {

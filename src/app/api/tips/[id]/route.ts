@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
-import { ufvkWatcher } from "@/lib/escrow/ufvk-watcher";
 import { zallet } from "@/lib/zcash";
 
 export async function GET(
@@ -29,21 +28,6 @@ export async function GET(
           );
           if (updated) {
             tip = updated;
-            const funded = await dbService.promoteTipToFunded((tip._id || tip.id).toString(), matchingTxid);
-            if (funded) tip = funded;
-          }
-        } else {
-          // Fallback to UFVK trial decryption
-          const detected = ufvkWatcher.findNoteByAddressOrMemo({
-            expectedAmountZec: tip.amountZec,
-            depositAddress: activeEscrowAddress,
-          });
-          if (detected?.txid) {
-            const updated = await dbService.confirmTipFunding(
-              (tip._id || tip.id).toString(),
-              detected.txid
-            );
-            if (updated) tip = updated;
           }
         }
       } catch (err) {
@@ -64,7 +48,7 @@ export async function GET(
         // Node unavailable or 0-conf
       }
 
-      if (confs >= 1 || elapsedMinutes >= 3) {
+      if (confs >= 1) {
         try {
           const updated = await dbService.promoteTipToFunded(
             (tip._id || tip.id).toString(),

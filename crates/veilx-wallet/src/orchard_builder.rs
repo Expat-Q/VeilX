@@ -3,7 +3,7 @@
 //! Constructs genuine t -> z shielding Orchard bundles containing:
 //! - 1 real recipient output action
 //! - 1 dummy padding action (satisfies Orchard circuit minimum of 2 actions)
-//! - flags = 0x01 (spendsDisabled = true, outputsEnabled = true)
+//! - flags = 0x02 (spendsDisabled = true, outputsEnabled = true)
 //! - valueBalanceOrchard = -payoutZats
 //! - anchorOrchard = [0u8; 32] (Anchor::empty_tree(), never expires)
 //! - Halo 2 Zero-Knowledge Proof generated client-side
@@ -82,13 +82,12 @@ pub struct ShieldingOrchardBundle {
     pub binding_sig_hex: String,
 }
 
-/// Builds, proves with Halo 2, and authorizes a shielding Orchard bundle.
+/// Builds, proves with Halo 2, and authorizes a shielding Orchard or Ironwood bundle.
 ///
 /// Output bundle contains:
 /// - Exactly 2 actions: 1 real recipient output + 1 dummy padding output
-/// - valueBalanceOrchard = -(payout_zatoshis as i64)
-/// - anchorOrchard = [0u8; 32] (empty tree anchor)
-/// - flags = 0x01 (spendsDisabled = true, outputsEnabled = true)
+/// - valueBalance = -(payout_zatoshis as i64)
+/// - flags = 0x02 (spendsDisabled = true, outputsEnabled = true)
 /// - Halo 2 proof verifying the actions
 /// - RedPallas binding signature over `sighash_bytes`
 pub fn build_and_prove_shielding_bundle(
@@ -96,6 +95,8 @@ pub fn build_and_prove_shielding_bundle(
     payout_zatoshis: u64,
     memo_bytes: Option<&[u8]>,
     sighash_bytes: &[u8; 32],
+    anchor_hex: Option<&str>,
+    is_ironwood: bool,
 ) -> Result<(ShieldingOrchardBundle, [u8; 32]), String> {
     let mut rng = rand::rng();
 
@@ -103,8 +104,34 @@ pub fn build_and_prove_shielding_bundle(
         .into_option()
         .ok_or_else(|| "Invalid recipient Orchard address: failed to parse 43 raw bytes".to_string())?;
 
-    let anchor = Anchor::empty_tree();
-    let bundle_version = BundleVersion::orchard_v2();
+    let (bundle_version, anchor, tx_version, pk, bundle_anchor_hex) = if is_ironwood {
+        let anchor_str = anchor_hex.ok_or_else(|| "Live anchor hex is required for Ironwood shielding bundle".to_string())?;
+        let anchor_raw = hex::decode(anchor_str).map_err(|e| format!("Invalid anchor hex: {}", e))?;
+        if anchor_raw.len() != 32 {
+            return Err(format!("Anchor must be 32 bytes, got {}", anchor_raw.len()));
+        }
+        let mut anchor_bytes = [0u8; 32];
+        anchor_bytes.copy_from_slice(&anchor_raw);
+        let anc = Anchor::from_bytes(anchor_bytes).into_option()
+            .ok_or_else(|| "Invalid anchor: failed to deserialize Merkle tree root".to_string())?;
+
+        (
+            BundleVersion::ironwood_v3(),
+            anc,
+            TxVersion::V6,
+            &*crate::orchard_wallet::ORCHARD_PROVING_KEY,
+            anchor_str.to_string(),
+        )
+    } else {
+        (
+            BundleVersion::orchard_v2(),
+            Anchor::empty_tree(),
+            TxVersion::V5,
+            &*V5_PROVING_KEY,
+            EMPTY_TREE_ANCHOR_HEX.to_string(),
+        )
+    };
+
     let flags = Flags::SPENDS_DISABLED;
 
     let mut builder = Builder::new(BundleType::DEFAULT, bundle_version, flags, anchor)
@@ -134,14 +161,13 @@ pub fn build_and_prove_shielding_bundle(
         ));
     }
 
-    // Compute V5 bundle commitment for ZIP-244 sighash & txid
+    // Compute bundle commitment for sighash & txid
     let bundle_commitment: [u8; 32] = unauth_bundle
-        .commitment(TxVersion::V5)
-        .map_err(|e| format!("Failed to compute V5 Orchard bundle commitment: {:?}", e))?
+        .commitment(tx_version)
+        .map_err(|e| format!("Failed to compute bundle commitment: {:?}", e))?
         .into();
 
     // Create client-side Halo 2 Zero-Knowledge Proof
-    let pk = &*V5_PROVING_KEY;
     let proven_bundle = unauth_bundle
         .create_proof(pk, &mut rng)
         .map_err(|e| format!("Halo 2 proof creation failed: {:?}", e))?;
@@ -176,10 +202,11 @@ pub fn build_and_prove_shielding_bundle(
 
     let bundle = ShieldingOrchardBundle {
         actions,
-        // In accordance with ZIP-225 / contract specification for spendsDisabled=true, outputsEnabled=true
-        flags: 0x01,
+        // In accordance with ZIP-225 Section 7.1: bit 0 = enableSpends, bit 1 = enableOutputs.
+        // For pure shielding (t -> z), spends are disabled and outputs are enabled: 0b00000010 = 0x02
+        flags: 0x02,
         value_balance_zats: -(payout_zatoshis as i64),
-        anchor_hex: EMPTY_TREE_ANCHOR_HEX.to_string(),
+        anchor_hex: bundle_anchor_hex,
         proof_hex: hex::encode(proof_bytes),
         spend_auth_sigs,
         binding_sig_hex: hex::encode(binding_sig_bytes),
@@ -286,11 +313,13 @@ mod tests {
             payout_zats,
             Some(memo),
             &sighash,
+            None,
+            false,
         )
         .expect("Bundle creation and proving must succeed");
 
         assert_eq!(bundle.actions.len(), 2, "Must contain exactly 2 actions (1 real + 1 dummy)");
-        assert_eq!(bundle.flags, 0x01, "Flags must be 0x01 (spendsDisabled=true, outputsEnabled=true)");
+        assert_eq!(bundle.flags, 0x02, "Flags must be 0x02 (spendsDisabled=true, outputsEnabled=true)");
         assert_eq!(bundle.value_balance_zats, -90_000, "Value balance must be negative payoutZats");
         assert_eq!(bundle.anchor_hex, EMPTY_TREE_ANCHOR_HEX, "Anchor must be empty tree root (64 zeros)");
         assert!(!bundle.proof_hex.is_empty(), "Proof must be generated");

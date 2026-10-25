@@ -87,6 +87,8 @@ Thumbs.db
 NexPlay*
 *.md
 !README.md
+!docs/*.md
+!docs/**/*.md
 !extensions/**/README.md
 *.hex
 

@@ -8,8 +8,7 @@ import {
   getNetworkConfig,
   getExplorerUrl,
   addressToP2pkhScriptHex,
-  serializeV5ShieldingTransaction,
-  signP2pkhInput,
+  extractRawOrchardAddressHex,
 } from "@/lib/zcash";
 import { deriveTipEscrowKeypair } from "@/lib/escrow/tip-escrow-keys";
 import { checkPayoutCircuitBreaker } from "@/lib/escrow/circuit-breaker";
@@ -260,64 +259,60 @@ export async function POST(req: NextRequest) {
 
     let rawTxHex = "";
 
-    // Method A: Native WASM engine build_v5_shielding_transaction if exported
-    if (wasm && typeof (wasm as any).build_v5_shielding_transaction === "function") {
+    // Extract raw Orchard address (86 hex characters)
+    let recipientRawOrchardHex = "";
+    try {
+      recipientRawOrchardHex = await extractRawOrchardAddressHex(destAddress, wasm);
+    } catch (addrErr: any) {
+      console.warn("[pczt-finalize] Failed to extract raw Orchard receiver:", addrErr?.message);
+    }
+
+    const memoBuf = Buffer.alloc(512);
+    memoBuf.write(itemDoc.memo || `VeilX Shielded Settlement ${entityId}`, 0, "utf8");
+    const memoHex = memoBuf.toString("hex");
+
+    const pcztParamsForWasm: ShieldingPcztParams = {
+      itemType,
+      itemId: entityId,
+      transparentUtxo: utxo,
+      payoutValueZats: expectedPayoutZats,
+      feeZats: 10000,
+      recipientRawOrchardHex,
+      memoHex,
+      expiryHeight,
+      network: ZCASH_NETWORK === "testnet" ? "testnet" : "mainnet",
+    };
+
+    // Method A: Native WASM engine finalize_shielding_transaction (canonical ZIP-244 BLAKE2b sighash)
+    if (wasm && typeof (wasm as any).finalize_shielding_transaction === "function") {
       try {
-        const wasmRes = (wasm as any).build_v5_shielding_transaction({
-          private_key_hex: escrowPrivateKey,
-          transparent_utxo: {
-            txid: utxo.txid,
-            vout: utxo.vout,
-            amount_zatoshis: BigInt(utxo.amountZats),
-            script_pubkey_hex: utxo.scriptPubKeyHex,
-          },
-          orchard_bundle: proofBundle,
-          expiry_height: expiryHeight,
-          consensus_branch_id: consensusBranchId,
-        });
-        if (wasmRes && typeof wasmRes === "object" && wasmRes.raw_hex) {
-          rawTxHex = wasmRes.raw_hex;
-        } else if (typeof wasmRes === "string") {
-          rawTxHex = wasmRes;
+        const finalizeRes = (wasm as any).finalize_shielding_transaction(
+          pcztParamsForWasm,
+          proofBundle,
+          escrowPrivateKey
+        );
+        if (finalizeRes?.raw_tx_hex) {
+          rawTxHex = finalizeRes.raw_tx_hex;
+        } else if (typeof finalizeRes === "string") {
+          rawTxHex = finalizeRes;
         }
       } catch (wasmErr: any) {
-        console.warn("[pczt-finalize] wasm.build_v5_shielding_transaction fallback:", wasmErr?.message);
+        console.error("[pczt-finalize] wasm.finalize_shielding_transaction failed:", wasmErr?.message || wasmErr);
       }
     }
 
-    // Method B: Client-provided complete signed transaction or direct assembly
+    // Method B: Client-provided complete signed transaction
     if (!rawTxHex && body.pcztSignedHex) {
       rawTxHex = body.pcztSignedHex;
     }
 
-    // Method C: Type-Safe Assembly using canonical V5 serializer and secp256k1 signature
+    // Method C's pseudo-sighash is removed. Enforce valid transaction assembly:
     if (!rawTxHex) {
-      const bindingSigHex = (proofBundle as any).bindingSigHex ||
-        (proofBundle as any).bindingSig ||
-        "00".repeat(64);
-
-      // Sign the transparent input
-      const sighashDummy = crypto.createHash("sha256").update(`${utxo.txid}:${utxo.vout}:${consensusBranchId}`).digest().toString("hex");
-      const scriptSigHex = signP2pkhInput(escrowPrivateKey, sighashDummy);
-
-      rawTxHex = serializeV5ShieldingTransaction({
-        consensusBranchId,
-        expiryHeight,
-        transparentInput: {
-          txid: utxo.txid,
-          vout: utxo.vout,
-          scriptSigHex,
-        },
-        orchardBundle: {
-          actions: proofBundle.actions,
-          flags: proofBundle.flags || 1,
-          valueBalanceZats: -BigInt(expectedPayoutZats),
-          anchorHex: proofBundle.anchorHex || "0000000000000000000000000000000000000000000000000000000000000000",
-          proofHex: proofBundle.proofHex,
-          spendAuthSigs: proofBundle.spendAuthSigs || [],
-          bindingSigHex,
-        },
-      });
+      await rollbackItemState(db, itemType, entityId, "Failed to assemble canonical V5 shielding transaction via WASM engine.");
+      return NextResponse.json<PcztFinalizeResponse>(
+        { success: false, error: "Failed to assemble canonical V5 shielding transaction. Native WASM finalization is required." },
+        { status: 500 }
+      );
     }
 
     // 7. Broadcast Raw Signed V5 Transaction via Node RPC
@@ -427,12 +422,12 @@ async function rollbackItemState(db: any, itemType: "tip" | "paylink" | "request
     } else if (itemType === "paylink") {
       await db.collection("paymentlinks").updateOne(
         { slug: entityId },
-        { $set: { status: "PAID", payoutError: errorMsg || null } }
+        { $set: { status: "FORWARD_PENDING", payoutError: errorMsg || null } }
       );
     } else {
       await db.collection("paymentrequests").updateOne(
         { _id: new ObjectId(entityId) },
-        { $set: { status: "FULFILLED", payoutError: errorMsg || null } }
+        { $set: { status: "FORWARD_PENDING", payoutError: errorMsg || null } }
       );
     }
   } catch (err) {
@@ -445,17 +440,17 @@ async function suspendItemState(db: any, itemType: "tip" | "paylink" | "request"
     if (itemType === "tip") {
       await db.collection("tips").updateOne(
         { _id: new ObjectId(entityId) },
-        { $set: { status: "SETTLEMENT_SUSPENDED", payoutError: reason } }
+        { $set: { status: "FUNDED", payoutError: reason } }
       );
     } else if (itemType === "paylink") {
       await db.collection("paymentlinks").updateOne(
         { slug: entityId },
-        { $set: { status: "SETTLEMENT_SUSPENDED", payoutError: reason } }
+        { $set: { status: "FORWARD_PENDING", payoutError: reason } }
       );
     } else {
       await db.collection("paymentrequests").updateOne(
         { _id: new ObjectId(entityId) },
-        { $set: { status: "SETTLEMENT_SUSPENDED", payoutError: reason } }
+        { $set: { status: "FORWARD_PENDING", payoutError: reason } }
       );
     }
   } catch (err) {

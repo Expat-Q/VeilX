@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbService } from "@/lib/db-service";
 import { getCurrentUser } from "@/lib/auth";
-import { ufvkWatcher } from "@/lib/escrow/ufvk-watcher";
 import { zallet } from "@/lib/zcash";
+import { deriveTipEscrowKeypair } from "@/lib/escrow/tip-escrow-keys";
 
 export async function GET(
   req: NextRequest,
@@ -17,19 +17,19 @@ export async function GET(
       );
     }
 
-    // 1. Autonomous Mobile Detection: If paylink is UNPAID, check if UFVK watcher detected incoming note
-    const activeShieldedDeposit = paylink.shieldedEscrowAddress || paylink.escrowDepositAddress;
-    if (paylink.status === "UNPAID" && activeShieldedDeposit) {
+    // 1. Autonomous Inflow Detection: If paylink is UNPAID, check per-paylink transparent escrow UTXOs
+    const paylinkEscrowKey = deriveTipEscrowKeypair(paylink.slug, "mainnet");
+    const activeTransparentVault = paylinkEscrowKey.address;
+    if (paylink.status === "UNPAID" && activeTransparentVault) {
       try {
-        const detected = ufvkWatcher.findNoteByAddressOrMemo({
-          expectedAmountZec: paylink.amountZec,
-          expectedMemo: paylink.title,
-          depositAddress: activeShieldedDeposit,
-        });
-        if (detected?.txid) {
+        const utxos = await zallet.getEscrowUtxos(activeTransparentVault);
+        const targetZats = Math.round(paylink.amountZec * 1e8);
+        const totalZats = utxos.reduce((acc: bigint, u: any) => acc + BigInt(u.satoshis), 0n);
+        if (utxos.length > 0 && totalZats >= BigInt(targetZats)) {
+          const matchingTxid = utxos[0].txid;
           const settled = await dbService.settlePayLink({
             slug: paylink.slug,
-            paidTxid: detected.txid,
+            paidTxid: matchingTxid,
             payerUsername: paylink.creatorUsernameSnapshot,
           });
           if (settled) paylink = settled;
@@ -62,7 +62,6 @@ export async function GET(
           user.xUsername?.toLowerCase() ===
             paylink.creatorUsernameSnapshot.toLowerCase()));
 
-    const activeTransparentVault = zallet.getEscrowTransparentAddress();
     const activeEscrowDeposit =
       paylink.escrowDepositAddress ||
       paylink.shieldedEscrowAddress ||
@@ -75,6 +74,15 @@ export async function GET(
         confirmations = rawTx?.confirmations || 0;
       } catch {
         // In mempool (0-conf)
+      }
+
+      if (confirmations >= 1 && (paylink.status === "SETTLING" || paylink.status === "UNPAID")) {
+        try {
+          const updated = await dbService.promotePayLinkToPaid(paylink.slug, paylink.paidTxid);
+          if (updated) paylink = updated;
+        } catch {
+          paylink.status = "PAID";
+        }
       }
     }
 

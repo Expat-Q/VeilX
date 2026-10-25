@@ -22,7 +22,7 @@ export async function GET() {
 
   // 2. Check Zcash RPC Node
   try {
-    await zallet.call("getinfo");
+    await zallet.call("getblockchaininfo");
     nodeStatus = "reachable";
   } catch (err: any) {
     nodeStatus = ALLOW_PAYMENT_SIMULATION ? "simulated" : "unreachable";

@@ -20,7 +20,10 @@ export async function POST(
       );
     }
 
-    const result = await dbService.retryForwardPayLink(slug.trim(), user.xUsername);
+    const body = await req.json().catch(() => ({}));
+    const customRecipient = body.recipientAddress?.trim();
+
+    const result = await dbService.retryForwardPayLink(slug.trim(), user.xUsername, customRecipient);
 
     return NextResponse.json({
       success: true,

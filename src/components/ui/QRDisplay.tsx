@@ -292,7 +292,7 @@ export function QRDisplay({
                           onClick={() => setPaymentMode("qr")}
                           className="inline-flex items-center gap-1 text-[11px] font-bold text-brown-950 underline"
                         >
-                          <span>Scan QR with Mobile (Zashi, Ywallet, ZODL)</span>
+                          <span>Scan QR with Mobile (Zashi, YWallet, Zingo!)</span>
                         </button>
                       </div>
                     </div>
@@ -347,7 +347,7 @@ export function QRDisplay({
               </p>
               <div className="pt-2 flex items-center justify-center gap-1 text-[11px] font-bold text-emerald-700">
                 <ShieldCheck className="w-3.5 h-3.5" />
-                <span>NU6.3 Shielded Zcash Escrow</span>
+                <span>NU5 Orchard Shielded Escrow</span>
               </div>
             </div>
           )}
@@ -370,7 +370,7 @@ export function QRDisplay({
             </div>
           </div>
           <p className="text-[11px] text-brown-500">
-            Scan with ZODL, Zashi, or Ywallet on your phone to settle shielded escrow
+            Scan with Zashi, YWallet, or Zingo! on your phone to fund escrow deposit address
           </p>
         </div>
       )}
