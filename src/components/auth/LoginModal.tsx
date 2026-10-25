@@ -57,7 +57,15 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
             <ArrowRight className="w-4 h-4 ml-auto text-brown-300" />
           </Button>
 
-
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = "/api/auth/demo";
+            }}
+            className="w-full py-1 text-center text-[11px] text-brown-500 hover:text-brown-900 underline transition-colors cursor-pointer"
+          >
+            Instant Demo Login (@_Web3Central)
+          </button>
         </div>
 
         {/* Footer Note */}
