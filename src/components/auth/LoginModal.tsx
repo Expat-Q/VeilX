@@ -56,31 +56,6 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
             <span>Continue with X</span>
             <ArrowRight className="w-4 h-4 ml-auto text-brown-300" />
           </Button>
-
-          <div className="flex items-center justify-center gap-3 pt-1 text-[11px] text-brown-500">
-            <span>Quick Demo:</span>
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = "/api/auth/demo?user=ExpatQ3";
-              }}
-              className="hover:text-brown-900 underline font-semibold cursor-pointer"
-            >
-              @ExpatQ3
-            </button>
-            <span>•</span>
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = "/api/auth/demo?user=_Web3Central";
-              }}
-              className="hover:text-brown-900 underline font-semibold cursor-pointer"
-            >
-              @_Web3Central
-            </button>
-          </div>
-
-
         </div>
 
         {/* Footer Note */}
