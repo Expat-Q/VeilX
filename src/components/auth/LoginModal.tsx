@@ -79,6 +79,8 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
               @_Web3Central
             </button>
           </div>
+
+
         </div>
 
         {/* Footer Note */}

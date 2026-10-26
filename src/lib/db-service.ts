@@ -440,8 +440,8 @@ export const dbService = {
       }
 
       if (tip.fundingTxid && tip.fundingTxid.startsWith("sim_tx_")) {
-        if (IS_PRODUCTION || !ALLOW_PAYMENT_SIMULATION) {
-          throw new Error("CANNOT_CLAIM_SIMULATED_TIP: Simulated test tips cannot be claimed for real funds in production.");
+        if (IS_PRODUCTION || process.env.NEXT_PUBLIC_ZCASH_NETWORK === "mainnet") {
+          throw new Error("CANNOT_CLAIM_SIMULATED_TIP: Simulated test tips cannot be claimed for real funds on Mainnet.");
         }
       }
 
@@ -658,7 +658,7 @@ export const dbService = {
         ],
       };
 
-      if (IS_PRODUCTION || !ALLOW_PAYMENT_SIMULATION) {
+      if (IS_PRODUCTION || process.env.NEXT_PUBLIC_ZCASH_NETWORK === "mainnet") {
         tipFilter.fundingTxid = { $not: /^sim_tx_/ };
       }
 
@@ -672,7 +672,7 @@ export const dbService = {
             (t.recipientUsernameSnapshot && t.recipientUsernameSnapshot.toLowerCase() === claimantHandle)
           ));
         const notSimulated =
-          !(IS_PRODUCTION || !ALLOW_PAYMENT_SIMULATION) ||
+          !(IS_PRODUCTION || process.env.NEXT_PUBLIC_ZCASH_NETWORK === "mainnet") ||
           !t.fundingTxid?.startsWith("sim_tx_");
         return isMatch && t.status === "FUNDED" && notSimulated && (!t.expiresAt || new Date(t.expiresAt) > now);
       });

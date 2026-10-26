@@ -7,12 +7,10 @@ export async function GET(req: NextRequest) {
   const { codeVerifier, codeChallenge } = generatePkcePair();
   const state = crypto.randomBytes(16).toString("hex");
 
-  // Determine dynamic callback URL matching Render or local development
+  // Determine dynamic callback URL matching Render deployment
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
   let dynamicCallback: string | undefined = undefined;
-  if (host.includes("localhost") || host.includes("127.0.0.1")) {
-    dynamicCallback = `http://${host}/api/auth/callback/twitter`;
-  } else if (host.includes("veilxapp.onrender.com")) {
+  if (host.includes("veilxapp.onrender.com")) {
     dynamicCallback = "https://veilxapp.onrender.com/api/auth/callback/twitter";
   } else if (host.includes("veilx.thearchive1111.xyz")) {
     dynamicCallback = "https://veilx.thearchive1111.xyz/api/auth/callback/twitter";

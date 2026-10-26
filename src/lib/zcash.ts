@@ -71,7 +71,8 @@ export function getExplorerUrl(txid: string, network: Network = ZCASH_NETWORK): 
  */
 export const ALLOW_PAYMENT_SIMULATION: boolean =
   process.env.NODE_ENV !== "production" &&
-  (process.env.ENABLE_TESTNET_SIMULATION === "true" || process.env.ENABLE_SIMULATION === "true" || process.env.NODE_ENV === "test");
+  (process.env.NEXT_PUBLIC_ZCASH_NETWORK === "testnet" || process.env.NODE_ENV === "test") &&
+  (process.env.ENABLE_TESTNET_SIMULATION === "true" || process.env.NODE_ENV === "test");
 
 export interface ZalletReceivedNote {
   txid: string;
