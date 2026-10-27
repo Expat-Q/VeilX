@@ -20,7 +20,7 @@
 * **Live Web App**: [https://veilxapp.onrender.com/](https://veilxapp.onrender.com/)
 * **𝕏 (Twitter)**: [https://x.com/VeilXapp](https://x.com/VeilXapp)
 * **Production Flow Audit**: [`docs/production-flow-of-funds-audit.md`](docs/production-flow-of-funds-audit.md)
-* **Demo Video**: *(will be updated later)*
+* **Demo Video**: [Watch on 𝕏](https://x.com/VeilXapp/status/2114684393386094652?s=20)
 
 ---
 
